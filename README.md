@@ -1,6 +1,6 @@
 # Annado
 
-A calm, keyboard-first task manager for macOS that lives in your Obsidian vault — no proprietary database, no lock-in.
+A clean task manager for macOS that lives on (?) your Obsidian vault, or markdown files. No proprietary database, no lock-in, it's all based on your own files. Designed with Obsidian in mind, but also works as a stand-alone app or on your folder with markdown files. 
 
 ![Today view](docs/images/today.png)
 

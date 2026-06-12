@@ -16,9 +16,10 @@ Annado treats your Obsidian vault as its database. It scans every `.md` file for
 
 See it in action — capturing a task in an Obsidian daily note during a meeting, then editing it in Annado:
 
-[![Watch the overview video: capture in Obsidian, edit in Annado](docs/images/overview-poster.png)](docs/overview.mp4)
 
-*▶ Click the image to watch (90 seconds).*
+https://github.com/user-attachments/assets/343a7135-a676-4ebd-99f5-dae0626fe181
+
+
 
 ![The same task in Annado and in the raw markdown file](docs/images/markdown-side-by-side.png)
 

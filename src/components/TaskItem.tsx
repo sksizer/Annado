@@ -5,7 +5,7 @@ import { useTaskStore } from '../stores/taskStore';
 import { usePanelState } from '../hooks/usePanelState';
 import { PRIORITY_CONFIG } from '../utils/projectColors';
 import { formatWhenDisplay, formatDeadlineCountdown, getDeadlineUrgency, formatDateForDisplay, getToday } from '../utils/dates';
-import { openInEditor, editorLabel } from '../utils/openInEditor';
+import { OpenFileButton } from './OpenFileButton';
 import { useSubtaskAdder, SubtaskInputRow, SubtaskToolbarButton } from './SubtaskAdder';
 import { WhenButton } from './WhenDatePicker';
 import { DeadlineButton } from './DeadlinePicker';
@@ -28,19 +28,16 @@ interface TaskItemProps {
 
 export const TaskItem = memo(function TaskItem({ task, showProject = true }: TaskItemProps) {
   const { selectedTaskIds, toggleTaskSelection, expandedTaskId, expandTask, setSelectedPerson, setSelectedProject, setSelectedTag, currentView } = usePanelState();
-  const { toggleTaskComplete, updateTask, availableProjects, availablePeople, vaultPath, projectColors, tagColors, openWhenPicker, openDeadlinePicker, isObsidianVault, editorType, editorCustomCommand } = useTaskStore(useShallow((s) => ({
+  const { toggleTaskComplete, updateTask, availableProjects, availablePeople, projectColors, tagColors, openWhenPicker, openDeadlinePicker, isObsidianVault } = useTaskStore(useShallow((s) => ({
     toggleTaskComplete: s.toggleTaskComplete,
     updateTask: s.updateTask,
     availableProjects: s.availableProjects,
     availablePeople: s.availablePeople,
-    vaultPath: s.vaultPath,
     projectColors: s.projectColors,
     tagColors: s.tagColors,
     openWhenPicker: s.openWhenPicker,
     openDeadlinePicker: s.openDeadlinePicker,
     isObsidianVault: s.isObsidianVault,
-    editorType: s.editorType,
-    editorCustomCommand: s.editorCustomCommand,
   })));
   // Per-row derived flags: only this row re-renders when its picker opens or it lingers
   const whenPickerForceOpen = useTaskStore((s) => s.taskIdWithOpenWhenPicker === task.id);
@@ -517,6 +514,7 @@ export const TaskItem = memo(function TaskItem({ task, showProject = true }: Tas
               </span>
             )}
             {getDeadlineDisplay()}
+            <OpenFileButton path={task.filePath} />
           </div>
         )}
       </div>
@@ -723,19 +721,9 @@ export const TaskItem = memo(function TaskItem({ task, showProject = true }: Tas
 
                 </div>
 
-                {/* Right side - editor link */}
+                {/* Right side - open file button */}
                 <div className="flex items-center gap-3 shrink-0">
-                  {vaultPath && (
-                    <button
-                      onClick={() => openInEditor(vaultPath, task.filePath, task.lineNumber, isObsidianVault, editorType, editorCustomCommand)}
-                      className="flex items-center gap-1 text-[11px] text-primary hover:text-[#3F51B5] transition-colors"
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                      </svg>
-                      {editorLabel(isObsidianVault, editorType)}
-                    </button>
-                  )}
+                  <OpenFileButton path={task.filePath} showLabel />
                 </div>
               </div>
             </div>

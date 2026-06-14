@@ -1,6 +1,8 @@
 import { useState, useEffect, ReactNode, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { useDroppable, useDraggable } from '@dnd-kit/core';
+import { useDroppable, useDraggable, DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { useTaskStore } from '../stores/taskStore';
 import { getTaskDate, limitGroupedTasks, groupTasksByCompletionDate, groupTasksByProject } from '../utils/taskGrouping';
 import { usePanelState } from '../hooks/usePanelState';
@@ -569,6 +571,40 @@ function EditableDateField({
   );
 }
 
+// Sortable wrapper for a single milestone row. Owns the row's flex container and
+// the grip handle (only the handle initiates a drag, so the inline name/date
+// editors stay clickable); the row's existing content is passed as children.
+function SortableMilestoneRow({
+  id,
+  children,
+}: {
+  id: string;
+  children: ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+  return (
+    <div ref={setNodeRef} style={style} className="flex items-center gap-2 group text-[12.5px]">
+      {/* Drag handle */}
+      <button
+        {...attributes}
+        {...listeners}
+        className="relative z-20 opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing text-[#CCC] dark:text-[#555] hover:text-[#999] dark:hover:text-[#888] transition-all flex-shrink-0 touch-none"
+        aria-label="Drag to reorder milestone"
+      >
+        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+          <path d="M4 7h16M4 12h16M4 17h16" />
+        </svg>
+      </button>
+      {children}
+    </div>
+  );
+}
+
 // Milestone list for project info panel
 function MilestoneList({
   milestones,
@@ -577,6 +613,21 @@ function MilestoneList({
   milestones: Milestone[];
   onUpdate: (milestones: Milestone[]) => void;
 }) {
+  // Drag-to-reorder: reordering the array is the persistence — onUpdate flows to
+  // saveProjectMetadata which writes the milestones array in order.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      const oldIndex = Number(active.id);
+      const newIndex = Number(over.id);
+      if (Number.isNaN(oldIndex) || Number.isNaN(newIndex)) return;
+      onUpdate(arrayMove(milestones, oldIndex, newIndex));
+    }
+  };
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingField, setEditingField] = useState<'name' | 'start' | 'end' | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -637,98 +688,102 @@ function MilestoneList({
       <div className="text-[10px] font-bold text-[#9b9eb0] dark:text-[#777] tracking-[0.06em] uppercase mb-1.5">
         Milestones
       </div>
-      <div className="space-y-1">
-        {milestones.map((m, i) => {
-          const endUrgency = m.end && !m.completed ? getDeadlineUrgency(m.end) : null;
-          const endColor = endUrgency ? DEADLINE_URGENCY_COLORS[endUrgency] : undefined;
-          return (
-            <div key={i} className="flex items-center gap-2 group text-[12.5px]">
-              {/* Checkbox */}
-              <button
-                onClick={() => toggleCompleted(i)}
-                className="flex-shrink-0 w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors"
-                style={{
-                  borderColor: m.completed ? '#43A047' : '#ccc',
-                  background: m.completed ? '#43A047' : 'transparent',
-                }}
-              >
-                {m.completed && (
-                  <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                    <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                )}
-              </button>
-              {/* Name */}
-              {editingIndex === i && editingField === 'name' ? (
-                <input
-                  value={editValue}
-                  onChange={(e) => setEditValue(e.target.value)}
-                  onBlur={commitEdit}
-                  onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') { setEditingIndex(null); setEditingField(null); } }}
-                  className="flex-1 min-w-0 px-1 py-0.5 text-[12.5px] bg-white dark:bg-[#2A2A2A] border border-[#E0E0E0] dark:border-[#3A3A3A] rounded focus:outline-none focus:border-primary"
-                  autoFocus
-                />
-              ) : (
-                <button
-                  onClick={() => startEdit(i, 'name')}
-                  className={`flex-1 min-w-0 truncate text-left transition-colors hover:text-primary dark:hover:text-primary-light ${m.completed ? 'line-through text-[#AAA] dark:text-[#666]' : 'text-[#333] dark:text-[#CCC]'}`}
-                >
-                  {m.name}
-                </button>
-              )}
-              {/* Start date */}
-              {editingIndex === i && editingField === 'start' ? (
-                <input
-                  type="date"
-                  value={editValue}
-                  onChange={(e) => { setEditValue(e.target.value); }}
-                  onBlur={commitEdit}
-                  className="text-[11px] px-1 py-0.5 bg-white dark:bg-[#2A2A2A] border border-[#E0E0E0] dark:border-[#3A3A3A] rounded focus:outline-none focus:border-primary"
-                  autoFocus
-                />
-              ) : (
-                <button
-                  onClick={() => startEdit(i, 'start')}
-                  className="text-[11px] text-[#999] dark:text-[#777] hover:text-primary dark:hover:text-primary-light flex-shrink-0"
-                >
-                  {m.start ? formatDateForDisplay(m.start) : '—'}
-                </button>
-              )}
-              <span className="text-[10px] text-[#CCC] dark:text-[#555]">→</span>
-              {/* End date */}
-              {editingIndex === i && editingField === 'end' ? (
-                <input
-                  type="date"
-                  value={editValue}
-                  onChange={(e) => { setEditValue(e.target.value); }}
-                  onBlur={commitEdit}
-                  className="text-[11px] px-1 py-0.5 bg-white dark:bg-[#2A2A2A] border border-[#E0E0E0] dark:border-[#3A3A3A] rounded focus:outline-none focus:border-primary"
-                  autoFocus
-                />
-              ) : (
-                <button
-                  onClick={() => startEdit(i, 'end')}
-                  className="text-[11px] flex-shrink-0"
-                  style={{ color: endColor || undefined }}
-                >
-                  <span className={endColor ? '' : 'text-[#999] dark:text-[#777] hover:text-primary dark:hover:text-primary-light'}>
-                    {m.end ? formatDateForDisplay(m.end) : '—'}
-                  </span>
-                </button>
-              )}
-              {/* Remove button */}
-              <button
-                onClick={() => removeMilestone(i)}
-                className="opacity-0 group-hover:opacity-100 text-[#CCC] dark:text-[#555] hover:text-danger transition-all flex-shrink-0"
-              >
-                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
-                </svg>
-              </button>
-            </div>
-          );
-        })}
-      </div>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={milestones.map((_, i) => String(i))} strategy={verticalListSortingStrategy}>
+          <div className="space-y-1">
+            {milestones.map((m, i) => {
+              const endUrgency = m.end && !m.completed ? getDeadlineUrgency(m.end) : null;
+              const endColor = endUrgency ? DEADLINE_URGENCY_COLORS[endUrgency] : undefined;
+              return (
+                <SortableMilestoneRow key={i} id={String(i)}>
+                  {/* Checkbox */}
+                  <button
+                    onClick={() => toggleCompleted(i)}
+                    className="flex-shrink-0 w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors"
+                    style={{
+                      borderColor: m.completed ? '#43A047' : '#ccc',
+                      background: m.completed ? '#43A047' : 'transparent',
+                    }}
+                  >
+                    {m.completed && (
+                      <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                        <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    )}
+                  </button>
+                  {/* Name */}
+                  {editingIndex === i && editingField === 'name' ? (
+                    <input
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onBlur={commitEdit}
+                      onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') { setEditingIndex(null); setEditingField(null); } }}
+                      className="flex-1 min-w-0 px-1 py-0.5 text-[12.5px] bg-white dark:bg-[#2A2A2A] border border-[#E0E0E0] dark:border-[#3A3A3A] rounded focus:outline-none focus:border-primary"
+                      autoFocus
+                    />
+                  ) : (
+                    <button
+                      onClick={() => startEdit(i, 'name')}
+                      className={`flex-1 min-w-0 truncate text-left transition-colors hover:text-primary dark:hover:text-primary-light ${m.completed ? 'line-through text-[#AAA] dark:text-[#666]' : 'text-[#333] dark:text-[#CCC]'}`}
+                    >
+                      {m.name}
+                    </button>
+                  )}
+                  {/* Start date */}
+                  {editingIndex === i && editingField === 'start' ? (
+                    <input
+                      type="date"
+                      value={editValue}
+                      onChange={(e) => { setEditValue(e.target.value); }}
+                      onBlur={commitEdit}
+                      className="text-[11px] px-1 py-0.5 bg-white dark:bg-[#2A2A2A] border border-[#E0E0E0] dark:border-[#3A3A3A] rounded focus:outline-none focus:border-primary"
+                      autoFocus
+                    />
+                  ) : (
+                    <button
+                      onClick={() => startEdit(i, 'start')}
+                      className="text-[11px] text-[#999] dark:text-[#777] hover:text-primary dark:hover:text-primary-light flex-shrink-0"
+                    >
+                      {m.start ? formatDateForDisplay(m.start) : '—'}
+                    </button>
+                  )}
+                  <span className="text-[10px] text-[#CCC] dark:text-[#555]">→</span>
+                  {/* End date */}
+                  {editingIndex === i && editingField === 'end' ? (
+                    <input
+                      type="date"
+                      value={editValue}
+                      onChange={(e) => { setEditValue(e.target.value); }}
+                      onBlur={commitEdit}
+                      className="text-[11px] px-1 py-0.5 bg-white dark:bg-[#2A2A2A] border border-[#E0E0E0] dark:border-[#3A3A3A] rounded focus:outline-none focus:border-primary"
+                      autoFocus
+                    />
+                  ) : (
+                    <button
+                      onClick={() => startEdit(i, 'end')}
+                      className="text-[11px] flex-shrink-0"
+                      style={{ color: endColor || undefined }}
+                    >
+                      <span className={endColor ? '' : 'text-[#999] dark:text-[#777] hover:text-primary dark:hover:text-primary-light'}>
+                        {m.end ? formatDateForDisplay(m.end) : '—'}
+                      </span>
+                    </button>
+                  )}
+                  {/* Remove button */}
+                  <button
+                    onClick={() => removeMilestone(i)}
+                    className="opacity-0 group-hover:opacity-100 text-[#CCC] dark:text-[#555] hover:text-danger transition-all flex-shrink-0"
+                  >
+                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                </SortableMilestoneRow>
+              );
+            })}
+          </div>
+        </SortableContext>
+      </DndContext>
       {/* Add milestone */}
       {addingNew ? (
         <div className="flex items-center gap-2 mt-1.5">

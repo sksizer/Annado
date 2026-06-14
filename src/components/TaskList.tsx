@@ -9,7 +9,7 @@ import { TaskItem } from './TaskItem';
 import { BulkActions } from './BulkActions';
 import { ViewType, Task, ProjectMetadata, PersonMetadata, RecurringTemplate, CalendarEvent, Milestone } from '../types/task';
 import { getProjectColor, getTagColor } from '../utils/projectColors';
-import { openInEditor, editorLabel } from '../utils/openInEditor';
+import { OpenFileButton } from './OpenFileButton';
 import { viewIcons, PersonIcon, TagIcon } from '../utils/viewIcons';
 import { formatDateForDisplay, getDateGroup, formatDeadlineShort, getDeadlineUrgency, DEADLINE_URGENCY_COLORS, formatDeadlineCountdown, parseLocalDate, getToday, getDaySections, DaySection, formatDateForStorage } from '../utils/dates';
 import { InlineMarkdown } from './MarkdownNotesRenderer';
@@ -31,15 +31,16 @@ const viewConfig: Record<ViewType, { title: string; color: string }> = {
 };
 
 // Project header component
-function ProjectHeader({ name, color = '#5C6BC0' }: { name: string; color?: string }) {
+function ProjectHeader({ name, color = '#5C6BC0', path }: { name: string; color?: string; path: string }) {
   return (
-    <div className="flex items-center gap-3 pl-[52px] pr-8 pt-8 pb-3">
+    <div className="group flex items-center gap-3 pl-[52px] pr-8 pt-8 pb-3">
       <svg className="w-4 h-4" style={{ color }} viewBox="0 0 24 24" fill="currentColor">
         <circle cx="12" cy="12" r="6" />
       </svg>
       <span className="text-[14px] font-semibold text-[#1A1A1A] dark:text-[#E0E0E0]">
         {name}
       </span>
+      {path && <OpenFileButton path={path} />}
       <div className="flex-1 h-px bg-[#E8E8E8] dark:bg-[#3A3A3A] ml-2" />
     </div>
   );
@@ -329,11 +330,13 @@ function ProjectGroup({
   projectName,
   tasks,
   color,
+  projectPath,
   defaultExpanded = true
 }: {
   projectName: string | null;
   tasks: Task[];
   color?: string;
+  projectPath?: string;
   defaultExpanded?: boolean;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -344,7 +347,7 @@ function ProjectGroup({
 
   return (
     <div>
-      {projectName && <ProjectHeader name={projectName} color={color} />}
+      {projectName && <ProjectHeader name={projectName} color={color} path={projectPath ?? ''} />}
       <div>
         {visibleTasks.map((task) => (
           <DraggableTaskItem key={task.id} task={task} showProject={!projectName} />
@@ -431,6 +434,7 @@ function RecurringTemplateItem({
             Last: {formatDate(template.lastGenerated)}
           </span>
         )}
+        <OpenFileButton path={template.filePath} />
       </div>
     </div>
   );
@@ -774,7 +778,7 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
     getFilteredTasks,
     setSelectedProject,
   } = usePanelState();
-  const { selectedPersonMetadata, isLoading, vaultPath, availableProjects, availablePeople, projectColors, tagColors, updateProjectMetadata, recurringTemplates, sidePanelOpen, toggleSidePanel, calendarEnabled, calendarEvents, smartLists, selectedSmartListId, isObsidianVault, editorType, editorCustomCommand } = useTaskStore(useShallow((s) => ({ selectedPersonMetadata: s.selectedPersonMetadata, isLoading: s.isLoading, vaultPath: s.vaultPath, availableProjects: s.availableProjects, availablePeople: s.availablePeople, projectColors: s.projectColors, tagColors: s.tagColors, updateProjectMetadata: s.updateProjectMetadata, recurringTemplates: s.recurringTemplates, sidePanelOpen: s.sidePanelOpen, toggleSidePanel: s.toggleSidePanel, calendarEnabled: s.calendarEnabled, calendarEvents: s.calendarEvents, smartLists: s.smartLists, selectedSmartListId: s.selectedSmartListId, isObsidianVault: s.isObsidianVault, editorType: s.editorType, editorCustomCommand: s.editorCustomCommand, })));
+  const { selectedPersonMetadata, isLoading, vaultPath, availableProjects, availablePeople, projectColors, tagColors, updateProjectMetadata, recurringTemplates, sidePanelOpen, toggleSidePanel, calendarEnabled, calendarEvents, smartLists, selectedSmartListId } = useTaskStore(useShallow((s) => ({ selectedPersonMetadata: s.selectedPersonMetadata, isLoading: s.isLoading, vaultPath: s.vaultPath, availableProjects: s.availableProjects, availablePeople: s.availablePeople, projectColors: s.projectColors, tagColors: s.tagColors, updateProjectMetadata: s.updateProjectMetadata, recurringTemplates: s.recurringTemplates, sidePanelOpen: s.sidePanelOpen, toggleSidePanel: s.toggleSidePanel, calendarEnabled: s.calendarEnabled, calendarEvents: s.calendarEvents, smartLists: s.smartLists, selectedSmartListId: s.selectedSmartListId })));
   const tasks = getFilteredTasks();
 
   // Logbook renders incrementally (large histories); reset when leaving the view
@@ -1031,18 +1035,13 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
             const personInfo = selectedPerson ? availablePeople.find(p => p.name === selectedPerson) : null;
             const targetPath = selectedProjectInfo?.path ?? personInfo?.path ?? null;
 
-            return targetPath && vaultPath ? (
-              <button
-                onClick={() => openInEditor(vaultPath, targetPath, 1, isObsidianVault, editorType, editorCustomCommand)}
-                className="text-[26px] font-medium text-[#1A1A1A] dark:text-[#E8E8E8] hover:underline text-left"
-                title={editorLabel(isObsidianVault, editorType)}
-              >
-                {title}
-              </button>
-            ) : (
-              <h2 className="text-[26px] font-medium text-[#1A1A1A] dark:text-[#E8E8E8]">
-                {title}
-              </h2>
+            return (
+              <div className="flex items-center gap-2">
+                <h2 className="text-[26px] font-medium text-[#1A1A1A] dark:text-[#E8E8E8]">
+                  {title}
+                </h2>
+                {targetPath && <OpenFileButton path={targetPath} showLabel size="md" />}
+              </div>
             );
           })()}
           {/* Side panel toggle button - only in main panel */}
@@ -1333,6 +1332,7 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
                   projectName={project}
                   tasks={projectTasks}
                   color={projectColor}
+                  projectPath={projectInfo?.path}
                 />
               );
             })}
@@ -1352,6 +1352,7 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
                       projectName={project}
                       tasks={projectTasks}
                       color={projectColor}
+                      projectPath={projectInfo?.path}
                     />
                   );
                 })}

@@ -3,7 +3,8 @@ import type { SliceCreator, RootState } from './types';
 import { persist, storeError } from '../storeUtils';
 import { KEYBINDING_DEFAULTS } from '../../utils/keybindings';
 import { normalizeTagInput } from '../../utils/tags';
-import type { FolderPaths, EditorType, Task, SmartList, TaskFormat, TaskFormatDetection } from '../../types/task';
+import { detectOpeners, refreshOpeners, type PathOpenerInfo } from '../../utils/pathOpener';
+import type { FolderPaths, Task, SmartList, TaskFormat, TaskFormatDetection } from '../../types/task';
 
 export type ThemePreference = 'light' | 'dark' | 'system';
 
@@ -99,7 +100,7 @@ async function loadVault(
     get().fetchFolderPaths();
     get().fetchExcludedPaths();
     get().fetchIsObsidianVault();
-    get().fetchEditorConfig();
+    get().loadPathOpeners();
     get().fetchTaskFormat();
     get().fetchTaskMarker();
     get().fetchRecurringTemplateCount();
@@ -113,8 +114,8 @@ export interface SettingsSlice {
   isLoading: boolean;
   error: string | null;
   isObsidianVault: boolean;
-  editorType: EditorType;
-  editorCustomCommand: string;
+  /** Apps detected on this machine that can open files/dirs (for "Open with…" menus). */
+  pathOpeners: PathOpenerInfo[];
   taskFormat: string; // '' = unset (show first-run picker)
   needsFormatPicker: boolean; // true once we've loaded an unset task_format → open first-run picker
   taskMarkerTag: string; // '' = import every checkbox; e.g. 'task' = only #task checkboxes
@@ -141,8 +142,8 @@ export interface SettingsSlice {
   setFolderPaths: (folderPaths: FolderPaths) => Promise<void>;
   fetchIsObsidianVault: () => Promise<void>;
   setIsObsidianVault: (value: boolean) => Promise<void>;
-  fetchEditorConfig: () => Promise<void>;
-  setEditorConfig: (editorType: EditorType, customCommand: string) => Promise<void>;
+  loadPathOpeners: () => Promise<void>;
+  refreshPathOpeners: () => Promise<void>;
   fetchTaskFormat: () => Promise<void>;
   setTaskFormat: (taskFormat: TaskFormat) => Promise<void>;
   detectTaskFormat: () => Promise<TaskFormatDetection>;
@@ -165,8 +166,7 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
   isLoading: false,
   error: null,
   isObsidianVault: false,
-  editorType: 'system' as EditorType,
-  editorCustomCommand: '',
+  pathOpeners: [],
   taskFormat: '',
   needsFormatPicker: false,
   taskMarkerTag: '',
@@ -223,17 +223,19 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
     }
   },
 
-  fetchEditorConfig: async () =>
-    guardedFetch(
-      set,
-      () => invoke<{ editorType: string; editorCustomCommand: string }>('get_editor_config'),
-      (config) => set({ editorType: config.editorType as EditorType, editorCustomCommand: config.editorCustomCommand }),
-    ),
-
-  setEditorConfig: async (editorType: EditorType, customCommand: string) => {
+  loadPathOpeners: async () => {
     try {
-      await invoke('set_editor_config', { editorType, editorCustomCommand: customCommand });
-      set({ editorType, editorCustomCommand: customCommand });
+      const pathOpeners = await detectOpeners();
+      set({ pathOpeners });
+    } catch (error) {
+      console.error('Failed to detect path openers:', error);
+    }
+  },
+
+  refreshPathOpeners: async () => {
+    try {
+      const pathOpeners = await refreshOpeners();
+      set({ pathOpeners });
     } catch (error) {
       storeError(set, error);
     }

@@ -11,6 +11,11 @@ interface OpenFileButtonProps {
   className?: string;
 }
 
+/**
+ * Right-aligned "open" affordance: left-click opens the file in the default app
+ * (configurable in Settings → General → Open In), right-click opens an
+ * "Open with…" menu. Hidden entirely when the user turns the icon off.
+ */
 export function OpenFileButton({
   path,
   showLabel = false,
@@ -18,20 +23,24 @@ export function OpenFileButton({
   className = '',
 }: OpenFileButtonProps) {
   const pathOpeners = useTaskStore((s) => s.pathOpeners);
+  const showOpenIcon = useTaskStore((s) => s.showOpenIcon);
+  const defaultOpenAppId = useTaskStore((s) => s.defaultOpenAppId);
+  const hiddenOpenAppIds = useTaskStore((s) => s.hiddenOpenAppIds);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
-  const iconSize = size === 'md' ? 'w-4 h-4' : 'w-3.5 h-3.5';
+  if (!showOpenIcon) return null;
 
+  const iconSize = size === 'md' ? 'w-4 h-4' : 'w-3.5 h-3.5';
   const buttonClassName = `inline-flex shrink-0 items-center justify-center gap-1 text-[#ADADB8] hover:text-primary dark:hover:text-primary-light transition duration-[120ms] ${className}`;
 
   return (
     <>
       <button
         type="button"
-        title={openLabel(pathOpeners, path)}
+        title={openLabel(pathOpeners, path, defaultOpenAppId)}
         onClick={(e) => {
           e.stopPropagation();
-          void openEntityFile(path, pathOpeners).catch(console.error);
+          void openEntityFile(path, pathOpeners, defaultOpenAppId).catch(console.error);
         }}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -53,13 +62,18 @@ export function OpenFileButton({
             d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
           />
         </svg>
-        {showLabel && <span className="text-[11px]">{openLabel(pathOpeners, path)}</span>}
+        {showLabel && (
+          <span className="text-[11px]">{openLabel(pathOpeners, path, defaultOpenAppId)}</span>
+        )}
       </button>
       {menu && (
         <ContextMenu
           x={menu.x}
           y={menu.y}
-          items={buildOpenMenuItems(path, pathOpeners)}
+          items={buildOpenMenuItems(path, pathOpeners, {
+            defaultAppId: defaultOpenAppId,
+            hiddenAppIds: hiddenOpenAppIds,
+          })}
           onClose={() => setMenu(null)}
         />
       )}

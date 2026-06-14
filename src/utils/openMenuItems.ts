@@ -16,15 +16,27 @@ import {
  * Spread the result into any entity's context menu. The "Open with" submenu is
  * omitted when no app can open the path.
  */
-export function buildOpenMenuItems(path: string, openers: PathOpenerInfo[]): ContextMenuItem[] {
+export interface OpenMenuOptions {
+  /** App used for the top-level default "Open" action (null = Obsidian-or-OS-default). */
+  defaultAppId?: string | null;
+  /** App ids to omit from the "Open with…" submenu. */
+  hiddenAppIds?: string[];
+}
+
+export function buildOpenMenuItems(
+  path: string,
+  openers: PathOpenerInfo[],
+  options: OpenMenuOptions = {},
+): ContextMenuItem[] {
+  const { defaultAppId = null, hiddenAppIds = [] } = options;
   const items: ContextMenuItem[] = [
     {
-      label: openLabel(openers, path),
-      onClick: () => void openEntityFile(path, openers).catch(console.error),
+      label: openLabel(openers, path, defaultAppId),
+      onClick: () => void openEntityFile(path, openers, defaultAppId).catch(console.error),
     },
   ];
 
-  const usable = openersForPath(openers, path);
+  const usable = openersForPath(openers, path).filter((o) => !hiddenAppIds.includes(o.appId));
   if (usable.length > 0) {
     items.push({
       label: 'Open with',

@@ -7,6 +7,9 @@ import type { FolderPaths, Task, SmartList } from '../../types/task';
 
 export type ThemePreference = 'light' | 'dark' | 'system';
 
+/** Where the "open in" icon sits on task / recurring rows. */
+export type OpenIconPosition = 'row-right' | 'after-text';
+
 
 const DEFAULT_FOLDER_PATHS: FolderPaths = {
   recurringTemplates: '12. System/recurring-tasks',
@@ -41,9 +44,20 @@ function loadPersistedSettings() {
       keybindings,
       confirmDelete: JSON.parse(localStorage.getItem('confirmDelete') ?? 'true'),
       accentColor: rawAccent && /^#[0-9a-fA-F]{6}$/.test(rawAccent) ? rawAccent : null,
+      showOpenIcon: JSON.parse(localStorage.getItem('showOpenIcon') ?? 'true') as boolean,
+      openIconPosition: ((): OpenIconPosition => {
+        try {
+          const v = JSON.parse(localStorage.getItem('openIconPosition') ?? '"row-right"');
+          return v === 'after-text' || v === 'row-right' ? v : 'row-right';
+        } catch {
+          return 'row-right';
+        }
+      })(),
+      defaultOpenAppId: JSON.parse(localStorage.getItem('defaultOpenAppId') ?? 'null') as string | null,
+      hiddenOpenAppIds: JSON.parse(localStorage.getItem('hiddenOpenAppIds') ?? '[]') as string[],
     };
   } catch {
-    return { theme: 'system' as ThemePreference, keybindings: { ...KEYBINDING_DEFAULTS }, confirmDelete: true, accentColor: null };
+    return { theme: 'system' as ThemePreference, keybindings: { ...KEYBINDING_DEFAULTS }, confirmDelete: true, accentColor: null, showOpenIcon: true, openIconPosition: 'row-right' as OpenIconPosition, defaultOpenAppId: null as string | null, hiddenOpenAppIds: [] as string[] };
   }
 }
 
@@ -66,6 +80,14 @@ export interface SettingsSlice {
   accentColor: string | null;
   keybindings: Record<string, string>;
   confirmDelete: boolean;
+  /** "Open in" icon: master visibility toggle. */
+  showOpenIcon: boolean;
+  /** Where the icon renders on task / recurring rows. */
+  openIconPosition: OpenIconPosition;
+  /** Preferred default app id for left-click open (null = Obsidian-or-OS-default). */
+  defaultOpenAppId: string | null;
+  /** App ids hidden from the "Open with…" submenu. */
+  hiddenOpenAppIds: string[];
 
   setVaultPath: (path: string) => Promise<void>;
   loadSavedVaultPath: () => Promise<void>;
@@ -82,6 +104,10 @@ export interface SettingsSlice {
   setAccentColor: (color: string | null) => void;
   setKeybinding: (action: string, keys: string) => void;
   setConfirmDelete: (confirm: boolean) => void;
+  setShowOpenIcon: (value: boolean) => void;
+  setOpenIconPosition: (position: OpenIconPosition) => void;
+  setDefaultOpenAppId: (appId: string | null) => void;
+  setOpenAppHidden: (appId: string, hidden: boolean) => void;
   clearError: () => void;
 }
 
@@ -97,6 +123,10 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
   accentColor: persisted.accentColor,
   keybindings: persisted.keybindings,
   confirmDelete: persisted.confirmDelete,
+  showOpenIcon: persisted.showOpenIcon,
+  openIconPosition: persisted.openIconPosition,
+  defaultOpenAppId: persisted.defaultOpenAppId,
+  hiddenOpenAppIds: persisted.hiddenOpenAppIds,
 
   setVaultPath: async (path: string) => {
     _vaultVersion++;
@@ -252,6 +282,30 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
   setConfirmDelete: (confirm: boolean) => {
     set({ confirmDelete: confirm });
     persist('confirmDelete', confirm);
+  },
+
+  setShowOpenIcon: (value: boolean) => {
+    set({ showOpenIcon: value });
+    persist('showOpenIcon', value);
+  },
+
+  setOpenIconPosition: (position: OpenIconPosition) => {
+    set({ openIconPosition: position });
+    persist('openIconPosition', position);
+  },
+
+  setDefaultOpenAppId: (appId: string | null) => {
+    set({ defaultOpenAppId: appId });
+    persist('defaultOpenAppId', appId);
+  },
+
+  setOpenAppHidden: (appId: string, hidden: boolean) => {
+    const current = get().hiddenOpenAppIds;
+    const next = hidden
+      ? (current.includes(appId) ? current : [...current, appId])
+      : current.filter((id) => id !== appId);
+    set({ hiddenOpenAppIds: next });
+    persist('hiddenOpenAppIds', next);
   },
 
   clearError: () => set({ error: null }),

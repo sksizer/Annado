@@ -375,6 +375,7 @@ function RecurringTemplateItem({
 }) {
   const { setSelectedProject, setSelectedPerson } = usePanelState();
   const wikilinkProps = useWikilinkProps({ onPersonClick: setSelectedPerson, onProjectClick: setSelectedProject });
+  const openIconPosition = useTaskStore((s) => s.openIconPosition);
 
   const recurrenceLabel = template.recurrenceType === 'fixed'
     ? `Every ${template.interval} ${template.intervalUnit}`
@@ -404,8 +405,11 @@ function RecurringTemplateItem({
 
       {/* Content */}
       <div className="flex-1 min-w-0">
-        <div className="text-[14px] text-[#1A1A1A] dark:text-[#E8E8E8] font-normal truncate">
-          <InlineMarkdown text={template.title} wikilinkProps={wikilinkProps} />
+        <div className="flex items-center gap-1.5 min-w-0">
+          <div className="min-w-0 truncate text-[14px] text-[#1A1A1A] dark:text-[#E8E8E8] font-normal">
+            <InlineMarkdown text={template.title} wikilinkProps={wikilinkProps} />
+          </div>
+          {openIconPosition === 'after-text' && <OpenFileButton path={template.filePath} />}
         </div>
         <div className="flex items-center gap-3 mt-0.5">
           <span className="text-[12px] text-[#888] dark:text-[#777]">
@@ -434,7 +438,7 @@ function RecurringTemplateItem({
             Last: {formatDate(template.lastGenerated)}
           </span>
         )}
-        <OpenFileButton path={template.filePath} />
+        {openIconPosition === 'row-right' && <OpenFileButton path={template.filePath} />}
       </div>
     </div>
   );

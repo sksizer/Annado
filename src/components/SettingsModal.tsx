@@ -51,7 +51,7 @@ type SettingsTab = 'general' | 'calendar' | 'shortcuts' | 'notifications' | 'abo
 
 
 export function SettingsModal({ isOpen, onClose }: SettingsProps) {
-  const { vaultPath, setVaultPath, keybindings, setKeybinding, folderPaths, setFolderPaths, theme, setTheme, accentColor, setAccentColor, excludedPaths, addExcludedPath, removeExcludedPath, calendarEnabled, setCalendarEnabled, availableCalendars, enabledCalendarNames, toggleCalendar, checkCalendarAccess, calendarAccessGranted, calendarBlockingDefaults, setCalendarBlocking, workSchedule, setWorkSchedule, sidebarCounts, setSidebarCount, showProjectCounts, setShowProjectCounts, weekStartsOn, setWeekStartsOn, agendaShowWeekends, setAgendaShowWeekends, defaultTaskDuration, setDefaultTaskDuration, confirmDelete, setConfirmDelete, isObsidianVault, setIsObsidianVault } = useTaskStore();
+  const { vaultPath, setVaultPath, keybindings, setKeybinding, folderPaths, setFolderPaths, theme, setTheme, accentColor, setAccentColor, excludedPaths, addExcludedPath, removeExcludedPath, calendarEnabled, setCalendarEnabled, availableCalendars, enabledCalendarNames, toggleCalendar, checkCalendarAccess, calendarAccessGranted, calendarBlockingDefaults, setCalendarBlocking, workSchedule, setWorkSchedule, sidebarCounts, setSidebarCount, showProjectCounts, setShowProjectCounts, weekStartsOn, setWeekStartsOn, agendaShowWeekends, setAgendaShowWeekends, defaultTaskDuration, setDefaultTaskDuration, confirmDelete, setConfirmDelete, isObsidianVault, setIsObsidianVault, pathOpeners, showOpenIcon, setShowOpenIcon, openIconPosition, setOpenIconPosition, defaultOpenAppId, setDefaultOpenAppId, hiddenOpenAppIds, setOpenAppHidden } = useTaskStore();
   const [isChangingVault, setIsChangingVault] = useState(false);
   const [localFolderPaths, setLocalFolderPaths] = useState(folderPaths);
   const [isSavingFolderPaths, setIsSavingFolderPaths] = useState(false);
@@ -337,6 +337,75 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
                     </span>
                     <Toggle checked={showProjectCounts} onChange={setShowProjectCounts} />
                   </div>
+                </div>
+              </div>
+
+              {/* Open In Section */}
+              <div>
+                <h3 className="text-[10px] font-semibold text-[#B0B0B0] dark:text-[#555] uppercase tracking-wider mb-3">
+                  Open In
+                </h3>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between py-1.5">
+                    <span className="text-[13px] text-[#1A1A1A] dark:text-[#E0E0E0]">Show open icon</span>
+                    <Toggle checked={showOpenIcon} onChange={setShowOpenIcon} />
+                  </div>
+
+                  <div className="flex items-center justify-between py-1.5">
+                    <span className="text-[13px] text-[#1A1A1A] dark:text-[#E0E0E0]">Icon position</span>
+                    <div className="flex rounded-lg bg-[#F0F0F0] dark:bg-[#2A2A2A] p-0.5">
+                      {([
+                        { id: 'row-right', label: 'Right of row' },
+                        { id: 'after-text', label: 'Right of text' },
+                      ] as const).map((opt) => (
+                        <button
+                          key={opt.id}
+                          onClick={() => setOpenIconPosition(opt.id)}
+                          className={`px-2.5 py-1 text-[12px] rounded-md transition-colors ${
+                            openIconPosition === opt.id
+                              ? 'bg-white dark:bg-[#3A3A3A] text-[#1A1A1A] dark:text-[#E0E0E0] shadow-sm'
+                              : 'text-[#888] dark:text-[#777] hover:text-[#1A1A1A] dark:hover:text-[#E0E0E0]'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-[#B0B0B0] dark:text-[#555] -mt-0.5">
+                    Applies to task &amp; recurring lists; the sidebar &amp; agenda use their natural placement.
+                  </p>
+
+                  <div className="flex items-center justify-between py-1.5">
+                    <span className="text-[13px] text-[#1A1A1A] dark:text-[#E0E0E0]">Default app</span>
+                    <select
+                      value={defaultOpenAppId ?? ''}
+                      onChange={(e) => setDefaultOpenAppId(e.target.value || null)}
+                      className="text-[12px] bg-[#F0F0F0] dark:bg-[#2A2A2A] text-[#1A1A1A] dark:text-[#E0E0E0] rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40"
+                    >
+                      <option value="">Automatic (Obsidian or system)</option>
+                      {pathOpeners.map((o) => (
+                        <option key={o.appId} value={o.appId}>{o.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {pathOpeners.length > 0 && (
+                    <div className="pt-2">
+                      <p className="text-[11px] text-[#B0B0B0] dark:text-[#555] mb-1">
+                        Show in “Open with…” menu
+                      </p>
+                      {pathOpeners.map((o) => (
+                        <div key={o.appId} className="flex items-center justify-between py-1.5">
+                          <span className="text-[13px] text-[#1A1A1A] dark:text-[#E0E0E0]">{o.name}</span>
+                          <Toggle
+                            checked={!hiddenOpenAppIds.includes(o.appId)}
+                            onChange={(v) => setOpenAppHidden(o.appId, !v)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 

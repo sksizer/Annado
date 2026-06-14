@@ -87,12 +87,15 @@ function tokenizeInlineProtectingLinks(text: string): InlineToken[] {
 export function InlineMarkdown({
   text,
   wikilinkProps,
+  className,
 }: {
   text: string;
   wikilinkProps: WikilinkProps;
+  /** Wrap the rendered tokens in a styled span (e.g. task titles carry their own text styling). */
+  className?: string;
 }) {
   const tokens = tokenizeInlineProtectingLinks(text);
-  return (
+  const rendered = (
     <>
       {tokens.map((tok, i) => {
         // code is always literal — no wikilink processing inside backticks
@@ -120,7 +123,6 @@ export function InlineMarkdown({
             availableProjects={wikilinkProps.availableProjects}
             isObsidianVault={wikilinkProps.isObsidianVault}
             autolinkUrls
-            openUnknownWikilinks
           />
         );
 
@@ -131,6 +133,8 @@ export function InlineMarkdown({
       })}
     </>
   );
+
+  return className ? <span className={className}>{rendered}</span> : rendered;
 }
 
 export function MarkdownNotesRenderer(props: MarkdownNotesRendererProps) {

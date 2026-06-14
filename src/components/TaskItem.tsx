@@ -6,7 +6,6 @@ import { usePanelState } from '../hooks/usePanelState';
 import { PRIORITY_CONFIG } from '../utils/projectColors';
 import { formatWhenDisplay, formatDeadlineCountdown, getDeadlineUrgency, formatDateForDisplay, getToday } from '../utils/dates';
 import { openInEditor, editorLabel } from '../utils/openInEditor';
-import { WikilinkRenderer } from './WikilinkRenderer';
 import { useSubtaskAdder, SubtaskInputRow, SubtaskToolbarButton } from './SubtaskAdder';
 import { WhenButton } from './WhenDatePicker';
 import { DeadlineButton } from './DeadlinePicker';
@@ -14,7 +13,7 @@ import { ProjectSelector } from './ProjectSelector';
 import { PrioritySelector } from './PrioritySelector';
 import { DurationPicker } from './DurationPicker';
 import { ChecklistItemRow } from './ChecklistItemRow';
-import { MarkdownNotesRenderer } from './MarkdownNotesRenderer';
+import { MarkdownNotesRenderer, InlineMarkdown, WikilinkProps } from './MarkdownNotesRenderer';
 import { TagEditor } from './TagEditor';
 import { WikilinkSuggestions } from './WikilinkSuggestions';
 import { useWikilinkSuggest, applyWikilink, buildWikilinkKeyHandler } from '../hooks/useWikilinkSuggest';
@@ -51,6 +50,24 @@ export const TaskItem = memo(function TaskItem({ task, showProject = true }: Tas
   // Create sets of person and project names for wiki-link rendering
   const personNames = useMemo(() => new Set(availablePeople.map(p => p.name)), [availablePeople]);
   const projectNames = useMemo(() => new Set(availableProjects.map(p => p.name)), [availableProjects]);
+
+  // Same wikilink/link context the notes & subtask renderers use, so titles render
+  // markdown identically. Unknown [[wikilinks]] keep the create menu (set on the
+  // InlineMarkdown below via openUnknownWikilinks={false}).
+  const titleWikilinkProps: WikilinkProps = useMemo(() => ({
+    personNames,
+    projectNames,
+    onPersonClick: setSelectedPerson,
+    onProjectClick: setSelectedProject,
+    onRemoveLink: (raw) => {
+      const newTitle = task.title.replace(raw, '').replace(/\s+/g, ' ').trim();
+      updateTask({ id: task.id, title: newTitle });
+    },
+    projectColors,
+    availableProjects,
+    isObsidianVault,
+  }), [personNames, projectNames, setSelectedPerson, setSelectedProject, projectColors, availableProjects, isObsidianVault, task.id, task.title, updateTask]);
+
   const isSelected = selectedTaskIds.includes(task.id);
   const isExpanded = expandedTaskId === task.id;
   const whenType = getWhenType(task.when);
@@ -427,19 +444,9 @@ export const TaskItem = memo(function TaskItem({ task, showProject = true }: Tas
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               {!task.completed && getPriorityIndicator()}
-              <WikilinkRenderer
-                title={task.title}
-                personNames={personNames}
-                projectNames={projectNames}
-                onPersonClick={setSelectedPerson}
-                onProjectClick={setSelectedProject}
-                onRemoveLink={(raw) => {
-                  const newTitle = task.title.replace(raw, '').replace(/\s+/g, ' ').trim();
-                  updateTask({ id: task.id, title: newTitle });
-                }}
-                projectColors={projectColors}
-                availableProjects={availableProjects}
-                isObsidianVault={isObsidianVault}
+              <InlineMarkdown
+                text={task.title}
+                wikilinkProps={titleWikilinkProps}
                 className={`text-[14px] leading-[1.4] ${
                   task.completed
                     ? 'line-through text-[#A0A0A0] dark:text-[#666]'

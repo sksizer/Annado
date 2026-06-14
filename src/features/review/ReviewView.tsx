@@ -3,7 +3,8 @@ import { useTaskStore } from '../../stores/taskStore';
 import { Task, ProjectInfo, EditorType } from '../../types/task';
 import { computeReviewData } from './computeReviewData';
 import { WhenDatePicker } from '../../components/WhenDatePicker';
-import { WikilinkRenderer } from '../../components/WikilinkRenderer';
+import { InlineMarkdown } from '../../components/MarkdownNotesRenderer';
+import { useWikilinkProps } from '../../hooks/useWikilinkProps';
 import { formatDateForDisplay, formatDateForStorage, getToday } from '../../utils/dates';
 import { openInEditor, editorLabel } from '../../utils/openInEditor';
 
@@ -312,9 +313,8 @@ function FlashCard({ task, isScheduling, onScheduleToggle, onScheduleClose, onAd
   onPark: () => void;
   onDelete: () => void;
 }) {
-  const { updateTask, availableProjects, availablePeople, projectColors, vaultPath, isObsidianVault, editorType, editorCustomCommand } = useTaskStore();
-  const personNames = useMemo(() => new Set(availablePeople.map(p => p.name)), [availablePeople]);
-  const projectNames = useMemo(() => new Set(availableProjects.map(p => p.name)), [availableProjects]);
+  const { updateTask, vaultPath, isObsidianVault, editorType, editorCustomCommand } = useTaskStore();
+  const wikilinkProps = useWikilinkProps();
 
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(task.title);
@@ -359,9 +359,7 @@ function FlashCard({ task, isScheduling, onScheduleToggle, onScheduleClose, onAd
           onClick={() => { setTitleDraft(task.title); setIsEditingTitle(true); }}
           className="text-[20px] font-medium text-[#1A1A1A] dark:text-[#E8E8E8] leading-snug mb-2 cursor-text rounded-lg -mx-1 px-1 py-0.5 hover:bg-black/[0.025] dark:hover:bg-white/[0.03] transition-colors"
         >
-          <WikilinkRenderer title={task.title} personNames={personNames} projectNames={projectNames}
-            onPersonClick={() => {}} onProjectClick={() => {}}
-            projectColors={projectColors} availableProjects={availableProjects} />
+          <InlineMarkdown text={task.title} wikilinkProps={wikilinkProps} />
         </div>
       )}
 
@@ -392,10 +390,7 @@ function FlashCard({ task, isScheduling, onScheduleToggle, onScheduleClose, onAd
         >
           {task.notes.split('\n').map((line, i) => (
             <span key={i}>{i > 0 && <br />}
-              <WikilinkRenderer title={line} personNames={personNames} projectNames={projectNames}
-                onPersonClick={() => {}} onProjectClick={() => {}}
-                projectColors={projectColors} availableProjects={availableProjects}
-                autolinkUrls openUnknownWikilinks />
+              <InlineMarkdown text={line} wikilinkProps={wikilinkProps} />
             </span>
           ))}
         </div>
@@ -435,9 +430,8 @@ function OverdueTaskCard({ task, isScheduling, onScheduleToggle, onScheduleClose
   onComplete: () => void;
   onDelete: () => void;
 }) {
-  const { availableProjects, availablePeople, projectColors, vaultPath, isObsidianVault, editorType, editorCustomCommand } = useTaskStore();
-  const personNames = useMemo(() => new Set(availablePeople.map(p => p.name)), [availablePeople]);
-  const projectNames = useMemo(() => new Set(availableProjects.map(p => p.name)), [availableProjects]);
+  const { vaultPath, isObsidianVault, editorType, editorCustomCommand } = useTaskStore();
+  const wikilinkProps = useWikilinkProps();
 
   const dateInfo = task.deadline
     ? { label: `Deadline: ${formatDateForDisplay(task.deadline)}`, red: true }
@@ -450,9 +444,7 @@ function OverdueTaskCard({ task, isScheduling, onScheduleToggle, onScheduleClose
       <CardLabel label="Overdue" task={task} vaultPath={vaultPath} isObsidianVault={isObsidianVault} editorType={editorType} editorCustomCommand={editorCustomCommand} />
 
       <div className="text-[20px] font-medium text-[#1A1A1A] dark:text-[#E8E8E8] leading-snug mb-2">
-        <WikilinkRenderer title={task.title} personNames={personNames} projectNames={projectNames}
-          onPersonClick={() => {}} onProjectClick={() => {}}
-          projectColors={projectColors} availableProjects={availableProjects} />
+        <InlineMarkdown text={task.title} wikilinkProps={wikilinkProps} />
       </div>
 
       <p className={`text-[12px] mb-6 ${dateInfo?.red ? 'text-danger' : 'text-[#ADADB8] dark:text-[#666]'}`}>
@@ -486,9 +478,8 @@ function StalledTaskCard({ task, isScheduling, onScheduleToggle, onScheduleClose
   onKeep: () => void;
   onDelete: () => void;
 }) {
-  const { availableProjects, availablePeople, projectColors, vaultPath, isObsidianVault, editorType, editorCustomCommand } = useTaskStore();
-  const personNames = useMemo(() => new Set(availablePeople.map(p => p.name)), [availablePeople]);
-  const projectNames = useMemo(() => new Set(availableProjects.map(p => p.name)), [availableProjects]);
+  const { vaultPath, isObsidianVault, editorType, editorCustomCommand } = useTaskStore();
+  const wikilinkProps = useWikilinkProps();
 
   const daysSinceCreated = task.createdDate
     ? Math.floor((Date.now() - new Date(task.createdDate + 'T12:00:00').getTime()) / (1000 * 60 * 60 * 24))
@@ -499,9 +490,7 @@ function StalledTaskCard({ task, isScheduling, onScheduleToggle, onScheduleClose
       <CardLabel label="Stalled" task={task} vaultPath={vaultPath} isObsidianVault={isObsidianVault} editorType={editorType} editorCustomCommand={editorCustomCommand} />
 
       <div className="text-[20px] font-medium text-[#1A1A1A] dark:text-[#E8E8E8] leading-snug mb-2">
-        <WikilinkRenderer title={task.title} personNames={personNames} projectNames={projectNames}
-          onPersonClick={() => {}} onProjectClick={() => {}}
-          projectColors={projectColors} availableProjects={availableProjects} />
+        <InlineMarkdown text={task.title} wikilinkProps={wikilinkProps} />
       </div>
 
       <p className="text-[12px] text-[#ADADB8] dark:text-[#666] mb-6">
@@ -554,14 +543,13 @@ function QuietProjectCard({ project, onOpenObsidian, onIgnore }: {
 
 export function ReviewView() {
   const {
-    tasks, availableProjects, availablePeople, vaultPath,
+    tasks, availableProjects, vaultPath,
     setCurrentView, updateTask, deleteTask, toggleTaskComplete,
-    projectColors, isObsidianVault, editorType, editorCustomCommand,
+    isObsidianVault, editorType, editorCustomCommand,
   } = useTaskStore();
 
   // Wikilink rendering — used for step 4 (Next Week) list
-  const personNames = useMemo(() => new Set(availablePeople.map(p => p.name)), [availablePeople]);
-  const projectNames = useMemo(() => new Set(availableProjects.map(p => p.name)), [availableProjects]);
+  const wikilinkProps = useWikilinkProps();
 
   const [step, setStep] = useState(0);
   const [done, setDone] = useState(false);
@@ -897,15 +885,7 @@ export function ReviewView() {
                   >
                     <div className="flex items-center gap-3">
                       <div className="flex-1 min-w-0 text-[14px] text-[#1A1A1A] dark:text-[#E0E0E0] leading-snug">
-                        <WikilinkRenderer
-                          title={task.title}
-                          personNames={personNames}
-                          projectNames={projectNames}
-                          onPersonClick={() => {}}
-                          onProjectClick={() => {}}
-                          projectColors={projectColors}
-                          availableProjects={availableProjects}
-                        />
+                        <InlineMarkdown text={task.title} wikilinkProps={wikilinkProps} />
                       </div>
                       {date && <span className="text-[12px] text-[#8A8A8A] dark:text-[#666] flex-shrink-0">{date}</span>}
                       <svg
@@ -922,17 +902,7 @@ export function ReviewView() {
                           <div className="text-[13px] text-[#777] dark:text-[#999] leading-relaxed">
                             {task.notes.split('\n').map((line, i) => (
                               <span key={i}>{i > 0 && <br />}
-                                <WikilinkRenderer
-                                  title={line}
-                                  personNames={personNames}
-                                  projectNames={projectNames}
-                                  onPersonClick={() => {}}
-                                  onProjectClick={() => {}}
-                                  projectColors={projectColors}
-                                  availableProjects={availableProjects}
-                                  autolinkUrls
-                                  openUnknownWikilinks
-                                />
+                                <InlineMarkdown text={line} wikilinkProps={wikilinkProps} />
                               </span>
                             ))}
                           </div>

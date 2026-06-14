@@ -12,7 +12,8 @@ import { getProjectColor, getTagColor } from '../utils/projectColors';
 import { openInEditor, editorLabel } from '../utils/openInEditor';
 import { viewIcons, PersonIcon, TagIcon } from '../utils/viewIcons';
 import { formatDateForDisplay, getDateGroup, formatDeadlineShort, getDeadlineUrgency, DEADLINE_URGENCY_COLORS, formatDeadlineCountdown, parseLocalDate, getToday, getDaySections, DaySection, formatDateForStorage } from '../utils/dates';
-import { WikilinkRenderer } from './WikilinkRenderer';
+import { InlineMarkdown } from './MarkdownNotesRenderer';
+import { useWikilinkProps } from '../hooks/useWikilinkProps';
 
 const viewConfig: Record<ViewType, { title: string; color: string }> = {
   inbox: { title: 'Inbox', color: '#1E88E5' },
@@ -369,10 +370,8 @@ function RecurringTemplateItem({
   template: RecurringTemplate;
   onClick: () => void;
 }) {
-  const { availableProjects, availablePeople, projectColors } = useTaskStore(useShallow((s) => ({ availableProjects: s.availableProjects, availablePeople: s.availablePeople, projectColors: s.projectColors, })));
   const { setSelectedProject, setSelectedPerson } = usePanelState();
-  const personNames = useMemo(() => new Set(availablePeople.map(p => p.name)), [availablePeople]);
-  const projectNames = useMemo(() => new Set(availableProjects.map(p => p.name)), [availableProjects]);
+  const wikilinkProps = useWikilinkProps({ onPersonClick: setSelectedPerson, onProjectClick: setSelectedProject });
 
   const recurrenceLabel = template.recurrenceType === 'fixed'
     ? `Every ${template.interval} ${template.intervalUnit}`
@@ -403,15 +402,7 @@ function RecurringTemplateItem({
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="text-[14px] text-[#1A1A1A] dark:text-[#E8E8E8] font-normal truncate">
-          <WikilinkRenderer
-            title={template.title}
-            personNames={personNames}
-            projectNames={projectNames}
-            onPersonClick={(name) => { setSelectedPerson(name); }}
-            onProjectClick={(name) => { setSelectedProject(name); }}
-            projectColors={projectColors}
-            availableProjects={availableProjects}
-          />
+          <InlineMarkdown text={template.title} wikilinkProps={wikilinkProps} />
         </div>
         <div className="flex items-center gap-3 mt-0.5">
           <span className="text-[12px] text-[#888] dark:text-[#777]">

@@ -3,12 +3,12 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { invoke } from '@tauri-apps/api/core';
 import { AgendaBlock } from './types';
 import { useTaskStore } from '../../stores/taskStore';
-import { useAgendaNames } from './useAgendaNames';
+import { useWikilinkProps } from '../../hooks/useWikilinkProps';
 import { TaskCheckbox } from '../../components/TaskCheckbox';
 import { useDraggable } from '@dnd-kit/core';
 import { DAY_START, DAY_END, PIXELS_PER_MINUTE, BLOCK_GAP_PX } from './constants';
 import { formatTime, formatDuration } from './utils';
-import { WikilinkRenderer } from '../../components/WikilinkRenderer';
+import { InlineMarkdown } from '../../components/MarkdownNotesRenderer';
 import { getMeetingUrl } from './meetingUrl';
 
 const MIN_BLOCK_HEIGHT = 26;
@@ -162,11 +162,10 @@ interface TimeBlockProps {
 export function TimeBlock({ block, columnOffset = 0, columnWidth = '100%', overlapIndex = 0, overlapTotal = 1, maxEndMinutes, onBlockClick }: TimeBlockProps) {
   const {
     toggleTaskComplete, updateTask,
-    availableProjects, projectColors,
     navigateToPerson, navigateToProject,
     setEventBlockingOverride, clearEventBlockingOverride, eventBlockingOverrides,
   } = useTaskStore();
-  const { personNames, projectNames } = useAgendaNames();
+  const wikilinkProps = useWikilinkProps({ onPersonClick: navigateToPerson, onProjectClick: navigateToProject });
   const [showMenu, setShowMenu] = useState<{ x: number; y: number } | null>(null);
   const [isResizing, setIsResizing] = useState(false);
   const [resizingDuration, setResizingDuration] = useState<number | null>(null);
@@ -320,14 +319,6 @@ export function TimeBlock({ block, columnOffset = 0, columnWidth = '100%', overl
     setShowMenu(null);
   };
 
-  const handlePersonClick = (name: string) => {
-    navigateToPerson(name);
-  };
-
-  const handleProjectClick = (name: string) => {
-    navigateToProject(name);
-  };
-
   // Schedule blocks: filled background block with grey tones
   if (isSchedule) {
     return (
@@ -389,14 +380,9 @@ export function TimeBlock({ block, columnOffset = 0, columnWidth = '100%', overl
             />
           )}
           {isTask ? (
-            <WikilinkRenderer
-              title={block.title}
-              personNames={personNames}
-              projectNames={projectNames}
-              onPersonClick={handlePersonClick}
-              onProjectClick={handleProjectClick}
-              projectColors={projectColors}
-              availableProjects={availableProjects}
+            <InlineMarkdown
+              text={block.title}
+              wikilinkProps={wikilinkProps}
               className="text-[12px] leading-tight font-medium truncate text-[#2A2A2A] dark:text-[#E0E0E0]"
             />
           ) : (

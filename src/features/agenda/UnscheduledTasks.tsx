@@ -3,9 +3,9 @@ import { useDroppable } from '@dnd-kit/core';
 import { useDraggable } from '@dnd-kit/core';
 import { Task } from '../../types/task';
 import { useTaskStore } from '../../stores/taskStore';
-import { useAgendaNames } from './useAgendaNames';
+import { useWikilinkProps } from '../../hooks/useWikilinkProps';
 import { TaskCheckbox } from '../../components/TaskCheckbox';
-import { WikilinkRenderer } from '../../components/WikilinkRenderer';
+import { InlineMarkdown } from '../../components/MarkdownNotesRenderer';
 import { formatDuration, formatTime, SlotSuggestion } from './utils';
 import { DEFAULT_DURATION } from './constants';
 import { useRescheduleSuggestions } from './useRescheduleSuggestions';
@@ -13,11 +13,10 @@ import { useRescheduleSuggestions } from './useRescheduleSuggestions';
 function DraggableTask({ task }: { task: Task }) {
   const {
     toggleTaskComplete,
-    availableProjects, projectColors,
     navigateToPerson, navigateToProject,
     defaultTaskDuration,
   } = useTaskStore();
-  const { personNames, projectNames } = useAgendaNames();
+  const wikilinkProps = useWikilinkProps({ onPersonClick: navigateToPerson, onProjectClick: navigateToProject });
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `agenda-${task.id}`,
     data: { task },
@@ -41,14 +40,9 @@ function DraggableTask({ task }: { task: Task }) {
         size="md"
         className="hover:border-primary"
       />
-      <WikilinkRenderer
-        title={task.title}
-        personNames={personNames}
-        projectNames={projectNames}
-        onPersonClick={(name) => navigateToPerson(name)}
-        onProjectClick={(name) => navigateToProject(name)}
-        projectColors={projectColors}
-        availableProjects={availableProjects}
+      <InlineMarkdown
+        text={task.title}
+        wikilinkProps={wikilinkProps}
         className="text-[13px] text-[#1A1A1A] dark:text-[#E0E0E0] truncate flex-1"
       />
       <span className="text-[11px] text-[#999] dark:text-[#666] flex-shrink-0">

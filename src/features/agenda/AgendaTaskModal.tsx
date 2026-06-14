@@ -12,8 +12,8 @@ import { DeadlineButton } from '../../components/DeadlinePicker';
 import { ProjectSelector } from '../../components/ProjectSelector';
 import { PrioritySelector } from '../../components/PrioritySelector';
 import { DurationPicker } from '../../components/DurationPicker';
-import { WikilinkRenderer } from '../../components/WikilinkRenderer';
-import { useAgendaNames } from './useAgendaNames';
+import { InlineMarkdown } from '../../components/MarkdownNotesRenderer';
+import { useWikilinkProps } from '../../hooks/useWikilinkProps';
 import { useSubtaskAdder, SubtaskInputRow, SubtaskToolbarButton } from '../../components/SubtaskAdder';
 import { ChecklistItemRow } from '../../components/ChecklistItemRow';
 import { detectDateHint } from '../../utils/detectDateHints';
@@ -26,8 +26,7 @@ interface AgendaTaskModalProps {
 }
 
 export function AgendaTaskModal({ taskId, onClose }: AgendaTaskModalProps) {
-  const { tasks, updateTask, toggleTaskComplete, tagColors, availableTags, availableProjects, projectColors, navigateToPerson, navigateToProject } = useTaskStore();
-  const { personNames, projectNames } = useAgendaNames();
+  const { tasks, updateTask, toggleTaskComplete, tagColors, availableTags, navigateToPerson, navigateToProject } = useTaskStore();
   const task = tasks.find(t => t.id === taskId);
 
   const [title, setTitle] = useState('');
@@ -109,6 +108,12 @@ export function AgendaTaskModal({ taskId, onClose }: AgendaTaskModalProps) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleClose]);
 
+  // Navigating to a person/project also closes the modal.
+  const wikilinkProps = useWikilinkProps({
+    onPersonClick: (name) => { navigateToPerson(name); handleClose(); },
+    onProjectClick: (name) => { navigateToProject(name); handleClose(); },
+  });
+
   if (!task) return null;
 
   const handleTitleBlur = async () => {
@@ -116,16 +121,6 @@ export function AgendaTaskModal({ taskId, onClose }: AgendaTaskModalProps) {
     if (title !== task.title) {
       await updateTask({ id: task.id, title });
     }
-  };
-
-  const handlePersonClick = (name: string) => {
-    navigateToPerson(name);
-    handleClose();
-  };
-
-  const handleProjectClick = (name: string) => {
-    navigateToProject(name);
-    handleClose();
   };
 
   const handleNotesBlur = async () => {
@@ -220,14 +215,9 @@ export function AgendaTaskModal({ taskId, onClose }: AgendaTaskModalProps) {
               className="flex-1 cursor-text min-h-[24px]"
               onClick={() => setIsEditingTitle(true)}
             >
-              <WikilinkRenderer
-                title={title}
-                personNames={personNames}
-                projectNames={projectNames}
-                onPersonClick={handlePersonClick}
-                onProjectClick={handleProjectClick}
-                projectColors={projectColors}
-                availableProjects={availableProjects}
+              <InlineMarkdown
+                text={title}
+                wikilinkProps={wikilinkProps}
                 className="text-[15px] text-[#1A1A1A] dark:text-[#E8E8E8] font-normal"
               />
             </div>
@@ -279,17 +269,7 @@ export function AgendaTaskModal({ taskId, onClose }: AgendaTaskModalProps) {
                   {notes.split('\n').map((line, i) => (
                     <div key={i}>
                       {line ? (
-                        <WikilinkRenderer
-                          title={line}
-                          personNames={personNames}
-                          projectNames={projectNames}
-                          onPersonClick={handlePersonClick}
-                          onProjectClick={handleProjectClick}
-                          projectColors={projectColors}
-                          availableProjects={availableProjects}
-                          autolinkUrls
-                          openUnknownWikilinks
-                        />
+                        <InlineMarkdown text={line} wikilinkProps={wikilinkProps} />
                       ) : (
                         <br />
                       )}

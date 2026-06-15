@@ -138,6 +138,7 @@ fn apply_areas_project(tasks: &mut [Task], areas_pattern: &str) {
 
 fn resolve_wikilinks(tasks: &mut [Task], person_names: &std::collections::HashSet<String>, project_names: &std::collections::HashSet<String>) {
     for task in tasks.iter_mut() {
+        // The title resolves both persons and projects.
         let wikilinks = extract_wikilinks(&task.title);
         for link in wikilinks {
             if person_names.contains(&link) {
@@ -148,6 +149,23 @@ fn resolve_wikilinks(tasks: &mut [Task], person_names: &std::collections::HashSe
                 if !task.projects.contains(&link) {
                     task.projects.push(link.clone());
                 }
+            }
+        }
+
+        // Subtasks (checklist items) resolve persons only, so a [[Person Name]]
+        // mentioned only in a subtask still surfaces the task under that contact.
+        // Projects are intentionally excluded here: task.projects round-trips into
+        // the title line on save (see parser::format_task_line), so adding a
+        // subtask's [[Project]] would hoist it into the title and mutate the file.
+        let subtask_persons: Vec<String> = task
+            .checklist
+            .iter()
+            .flat_map(|item| extract_wikilinks(&item.title))
+            .filter(|link| person_names.contains(link))
+            .collect();
+        for link in subtask_persons {
+            if !task.persons.contains(&link) {
+                task.persons.push(link);
             }
         }
     }

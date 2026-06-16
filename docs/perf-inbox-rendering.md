@@ -33,7 +33,7 @@ render.
 | 2 | `list-performance-memoization` | Memoize filtered/grouped tasks | ✅ |
 | 3 | `list-performance-split-expanded-row` | Split collapsed row from expanded editor (+ hoist shared Sets) | ✅ |
 | 4 | `list-performance-content-visibility` | `content-visibility: auto` — skip layout/paint for off-screen rows | ✅ |
-| 5 | `list-performance-virtualize` | True windowing with `@tanstack/react-virtual` | planned |
+| 5 | `list-performance-virtualize` | True windowing with `@tanstack/react-virtual` | ✅ |
 
 ### PR1 — primitive selectors (this branch)
 
@@ -103,6 +103,50 @@ removes the nodes themselves.
 **Verify visually:** scroll a ~3000-item inbox (should stay smooth), fast-scroll
 for any scrollbar jump, and confirm ⌘F / keyboard-nav scroll-into-view still
 reach off-screen rows.
+
+### PR5 — true windowing with @tanstack/react-virtual
+
+Only the rows near the viewport are mounted (~40 instead of ~3000), which cuts
+DOM nodes, React reconciliation, and memory — the things PR4's content-visibility
+couldn't. Scope: the grouped-by-project (inbox/today/anytime/someday) path and
+the flat project/person/tag lists. Upcoming (day sections) and Logbook (already
+paginated at 100) keep their existing rendering.
+
+How it works:
+- The grouped view is flattened into one `TaskRow[]` (`groupedRows`) — project/
+  evening headers and task rows in a single array — and the flat views into
+  `flatRows`. `ProjectGroup` is gone (its "show 5 more" was already vestigial,
+  since groups defaulted to expanded).
+- `VirtualTaskList` runs `useVirtualizer` against the shared scroll container,
+  measures each row's real height (`measureElement`, so collapsed rows and the
+  taller expanded card both size correctly), and uses a `scrollMargin` for any
+  content rendered above the list (e.g. the Today calendar block).
+- Keyboard-selected rows can be outside the window, so a selection-driven
+  `scrollToIndex` brings the sole-selected row into view (the per-row
+  `scrollIntoView` only works for already-mounted rows).
+- Drag-and-drop is unchanged structurally (drop targets are the view-zone/day
+  containers, not rows) and now registers `useDraggable` only for visible rows.
+
+**Trade-off vs PR4:** strictly more capable but a much larger change. Test
+PR4 first — if it's enough, this PR can wait.
+
+**⚠️ Manual test checklist** (jsdom can't exercise windowing, so tests don't
+cover it): smooth scroll through ~3000 items; expand/collapse re-measures and
+shifts rows below; drag-and-drop within the list + auto-scroll near edges;
+keyboard nav (↑/↓, ⌃J/⌃K) scrolls off-screen selections into view; ⌘S/⌘D on a
+selected row; switching views resets cleanly; the "New To-Do" footer in
+project/person views.
+
+## Results (measured locally on a ~3000-task vault)
+
+- PRs 1–3 removed the per-interaction cost: selecting/expanding a task no longer
+  scales with the total row count, and collapsed rows are cheap.
+- PR4 (`content-visibility`) helped but was **not** enough on its own to make
+  scrolling smooth at ~3000 items.
+- PR5 (`@tanstack/react-virtual`) was the **decisive** win — the list scrolls
+  smoothly at ~3000 tasks even in an unoptimized dev build (StrictMode
+  double-render, unminified). PR4 still helps the views PR5 doesn't virtualize
+  (Upcoming, Logbook).
 
 ## How to measure
 

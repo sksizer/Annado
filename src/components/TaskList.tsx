@@ -1,5 +1,6 @@
-import { useState, useEffect, ReactNode, useMemo } from 'react';
+import { useState, useEffect, useRef, useLayoutEffect, ReactNode, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useDroppable, useDraggable, DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -211,6 +212,100 @@ function DraggableTaskItem({ task, showProject }: { task: Task; showProject: boo
   );
 }
 
+// Flattened row model for the virtualized list. Project/evening headers and task
+// rows live in a single array so the whole grouped/flat list can be windowed.
+type TaskRow =
+  | { kind: 'task'; key: string; task: Task; showProject: boolean }
+  | { kind: 'projectHeader'; key: string; name: string; color?: string }
+  | { kind: 'eveningHeader'; key: string };
+
+/**
+ * Windowed task list: only the rows near the viewport are mounted. Heights are
+ * measured dynamically (collapsed rows vs the taller expanded card), and a
+ * scroll margin accounts for any content rendered above the list inside the
+ * shared scroll container. `footer` (e.g. a "New To-Do" button) renders after.
+ */
+function VirtualTaskList({
+  rows,
+  scrollRef,
+  footer,
+}: {
+  rows: TaskRow[];
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  footer?: ReactNode;
+}) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+
+  // Offset of the list within the scroll container's content (e.g. the Today
+  // calendar block can render above it). Recompute when the row set changes.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const scroller = scrollRef.current;
+    if (!list || !scroller) return;
+    const offset = list.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+    setScrollMargin(offset);
+  }, [scrollRef, rows.length]);
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 44,
+    overscan: 10,
+    getItemKey: (index) => rows[index].key,
+    scrollMargin,
+  });
+
+  // Keyboard navigation selects rows that may be outside the rendered window, so
+  // the row can't scroll itself into view. Drive it from the virtualizer instead:
+  // when the sole selection changes, scroll that row into view (mounting it).
+  const isMain = usePanelId() === 'main';
+  const soleSelectedId = useTaskStore((s) => {
+    const ids = isMain ? s.selectedTaskIds : s.sidePanelSelectedTaskIds;
+    return ids.length === 1 ? ids[0] : null;
+  });
+  useEffect(() => {
+    if (!soleSelectedId) return;
+    const index = rows.findIndex((r) => r.kind === 'task' && r.task.id === soleSelectedId);
+    if (index >= 0) virtualizer.scrollToIndex(index, { align: 'auto' });
+    // Only react to selection changes, not to every rows/virtualizer identity change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soleSelectedId]);
+
+  return (
+    <div ref={listRef}>
+      <div style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
+        {virtualizer.getVirtualItems().map((vRow) => {
+          const row = rows[vRow.index];
+          return (
+            <div
+              key={vRow.key}
+              data-index={vRow.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                transform: `translateY(${vRow.start - scrollMargin}px)`,
+              }}
+            >
+              {row.kind === 'task' ? (
+                <DraggableTaskItem task={row.task} showProject={row.showProject} />
+              ) : row.kind === 'projectHeader' ? (
+                <ProjectHeader name={row.name} color={row.color} />
+              ) : (
+                <EveningHeader />
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {footer}
+    </div>
+  );
+}
+
 // Helper to get date from task's when field, falling back to deadline
 // Unified deadline item for Upcoming view (projects and milestones)
 interface DeadlineItem {
@@ -323,44 +418,6 @@ function DeadlineBadgeGroup({
         ))}
       </div>
     </>
-  );
-}
-
-// Collapsible project group
-function ProjectGroup({
-  projectName,
-  tasks,
-  color,
-  defaultExpanded = true
-}: {
-  projectName: string | null;
-  tasks: Task[];
-  color?: string;
-  defaultExpanded?: boolean;
-}) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-  const INITIAL_SHOW_COUNT = 5;
-  const hasMore = tasks.length > INITIAL_SHOW_COUNT;
-  const visibleTasks = expanded ? tasks : tasks.slice(0, INITIAL_SHOW_COUNT);
-  const remainingCount = tasks.length - INITIAL_SHOW_COUNT;
-
-  return (
-    <div>
-      {projectName && <ProjectHeader name={projectName} color={color} />}
-      <div>
-        {visibleTasks.map((task) => (
-          <DraggableTaskItem key={task.id} task={task} showProject={!projectName} />
-        ))}
-      </div>
-      {hasMore && !expanded && (
-        <button
-          onClick={() => setExpanded(true)}
-          className="w-full pl-[52px] pr-8 py-4 text-[13px] text-primary dark:text-primary-light hover:text-[#3F51B5] dark:hover:text-[#9FA8DA] text-left transition-colors"
-        >
-          Show {remainingCount} more...
-        </button>
-      )}
-    </div>
   );
 }
 
@@ -1013,6 +1070,45 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
     projectNames: new Set(availableProjects.map((p) => p.name)),
   }), [availablePeople, availableProjects]);
 
+  // Scroll container for the virtualized list.
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Flatten the grouped-by-project view (headers + tasks + evening section) into
+  // a single row array for virtualization.
+  const groupedRows = useMemo<TaskRow[]>(() => {
+    if (!groupedTasks) return [];
+    const out: TaskRow[] = [];
+    for (const task of groupedTasks.noProject) {
+      out.push({ kind: 'task', key: task.id, task, showProject: true });
+    }
+    for (const { project, tasks: projectTasks } of groupedTasks.projects) {
+      const projectInfo = availableProjects.find((p) => p.name === project);
+      const color = getProjectColor(project, projectInfo?.parentFolder, projectColors);
+      out.push({ kind: 'projectHeader', key: `header:${project}`, name: project, color });
+      for (const task of projectTasks) out.push({ kind: 'task', key: task.id, task, showProject: false });
+    }
+    if (eveningGrouped) {
+      out.push({ kind: 'eveningHeader', key: 'evening-header' });
+      for (const task of eveningGrouped.noProject) {
+        out.push({ kind: 'task', key: task.id, task, showProject: true });
+      }
+      for (const { project, tasks: projectTasks } of eveningGrouped.projects) {
+        const projectInfo = availableProjects.find((p) => p.name === project);
+        const color = getProjectColor(project, projectInfo?.parentFolder, projectColors);
+        out.push({ kind: 'projectHeader', key: `evening-header:${project}`, name: project, color });
+        for (const task of projectTasks) out.push({ kind: 'task', key: task.id, task, showProject: false });
+      }
+    }
+    return out;
+  }, [groupedTasks, eveningGrouped, availableProjects, projectColors]);
+
+  // Flat task list (project view, person/tag view). showProject mirrors the
+  // original branches: hidden inside a project, shown otherwise.
+  const flatRows = useMemo<TaskRow[]>(
+    () => tasks.map((task) => ({ kind: 'task', key: task.id, task, showProject: !selectedProject })),
+    [tasks, selectedProject],
+  );
+
   // Local state for editing metadata
   const [editingDescription, setEditingDescription] = useState(false);
   const [localDescription, setLocalDescription] = useState('');
@@ -1301,7 +1397,7 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
       </div>
 
       {/* Task list */}
-      <div className="flex-1 overflow-y-auto pb-20 pt-1">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto pb-20 pt-1">
         {/* Recurring templates view */}
         {currentView === 'recurring' ? (
           <div>
@@ -1409,70 +1505,29 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
         ) : groupedTasks ? (
           // Render grouped by project
           <DroppableViewZone viewType={currentView}>
-            {/* Tasks without project first */}
-            {groupedTasks.noProject.length > 0 && (
-              <ProjectGroup
-                projectName={null}
-                tasks={groupedTasks.noProject}
-              />
-            )}
-            {/* Then tasks grouped by project */}
-            {groupedTasks.projects.map(({ project, tasks: projectTasks }) => {
-              const projectInfo = availableProjects.find(p => p.name === project);
-              const projectColor = getProjectColor(project, projectInfo?.parentFolder, projectColors);
-              return (
-                <ProjectGroup
-                  key={project}
-                  projectName={project}
-                  tasks={projectTasks}
-                  color={projectColor}
-                />
-              );
-            })}
-            {/* Evening section — only shown in Today view when there are evening tasks */}
-            {eveningGrouped && (
-              <>
-                <EveningHeader />
-                {eveningGrouped.noProject.length > 0 && (
-                  <ProjectGroup projectName={null} tasks={eveningGrouped.noProject} />
-                )}
-                {eveningGrouped.projects.map(({ project, tasks: projectTasks }) => {
-                  const projectInfo = availableProjects.find(p => p.name === project);
-                  const projectColor = getProjectColor(project, projectInfo?.parentFolder, projectColors);
-                  return (
-                    <ProjectGroup
-                      key={`evening-${project}`}
-                      projectName={project}
-                      tasks={projectTasks}
-                      color={projectColor}
-                    />
-                  );
-                })}
-              </>
-            )}
+            <VirtualTaskList rows={groupedRows} scrollRef={scrollRef} />
           </DroppableViewZone>
         ) : selectedProject ? (
-          // Render project view - simple list
-          <div>
-            {tasks.map((task) => (
-              <DraggableTaskItem key={task.id} task={task} showProject={false} />
-            ))}
-
-            {/* New To-Do button */}
-            <button
-              onClick={() => useTaskStore.getState().openQuickAdd({
-                project: selectedProject || undefined,
-              })}
-              className="flex items-center gap-3 py-1.5 ml-[36px] mr-4 px-4 opacity-50 hover:opacity-100 transition-opacity duration-150 outline-none"
-            >
-              <div className="mt-[3px] w-5 h-5 rounded-full border-[1.5px] border-black/20 dark:border-white/25 flex items-center justify-center flex-shrink-0">
-                <svg className="w-2.5 h-2.5 text-black/20 dark:text-white/25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
-                  <path d="M12 5v14M5 12h14" />
-                </svg>
-              </div>
-              <span className="text-[14px] text-black/40 dark:text-white/40">New To-Do</span>
-            </button>
-          </div>
+          // Render project view — virtualized flat list
+          <VirtualTaskList
+            rows={flatRows}
+            scrollRef={scrollRef}
+            footer={
+              <button
+                onClick={() => useTaskStore.getState().openQuickAdd({
+                  project: selectedProject || undefined,
+                })}
+                className="flex items-center gap-3 py-1.5 ml-[36px] mr-4 px-4 opacity-50 hover:opacity-100 transition-opacity duration-150 outline-none"
+              >
+                <div className="mt-[3px] w-5 h-5 rounded-full border-[1.5px] border-black/20 dark:border-white/25 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-2.5 h-2.5 text-black/20 dark:text-white/25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+                    <path d="M12 5v14M5 12h14" />
+                  </svg>
+                </div>
+                <span className="text-[14px] text-black/40 dark:text-white/40">New To-Do</span>
+              </button>
+            }
+          />
         ) : logbookGroups ? (
           // Render Logbook grouped by completion date
           <div>
@@ -1494,13 +1549,11 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
             )}
           </div>
         ) : (
-          // Render flat list (for person view, tag view, or logbook with filters)
-          <div>
-            {tasks.map((task) => (
-              <DraggableTaskItem key={task.id} task={task} showProject={!selectedProject} />
-            ))}
-            {/* New To-Do button - shown in person views */}
-            {selectedPerson && (
+          // Render flat list (person/tag view) — virtualized
+          <VirtualTaskList
+            rows={flatRows}
+            scrollRef={scrollRef}
+            footer={selectedPerson ? (
               <button
                 onClick={() => useTaskStore.getState().openQuickAdd({
                   person: selectedPerson || undefined,
@@ -1515,8 +1568,8 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
                 </div>
                 <span className="text-[14px] text-black/40 dark:text-white/40">New To-Do</span>
               </button>
-            )}
-          </div>
+            ) : undefined}
+          />
         )}
         </>
         )}

@@ -28,7 +28,7 @@ interface TaskItemProps {
 
 export const TaskItem = memo(function TaskItem({ task, showProject = true }: TaskItemProps) {
   const { selectedTaskIds, toggleTaskSelection, expandedTaskId, expandTask, setSelectedPerson, setSelectedProject, setSelectedTag, currentView } = usePanelState();
-  const { toggleTaskComplete, updateTask, availableProjects, availablePeople, projectColors, tagColors, openWhenPicker, openDeadlinePicker, isObsidianVault } = useTaskStore(useShallow((s) => ({
+  const { toggleTaskComplete, updateTask, availableProjects, availablePeople, projectColors, tagColors, openWhenPicker, openDeadlinePicker, isObsidianVault, openIconPosition } = useTaskStore(useShallow((s) => ({
     toggleTaskComplete: s.toggleTaskComplete,
     updateTask: s.updateTask,
     availableProjects: s.availableProjects,
@@ -38,6 +38,7 @@ export const TaskItem = memo(function TaskItem({ task, showProject = true }: Tas
     openWhenPicker: s.openWhenPicker,
     openDeadlinePicker: s.openDeadlinePicker,
     isObsidianVault: s.isObsidianVault,
+    openIconPosition: s.openIconPosition,
   })));
   // Per-row derived flags: only this row re-renders when its picker opens or it lingers
   const whenPickerForceOpen = useTaskStore((s) => s.taskIdWithOpenWhenPicker === task.id);
@@ -473,6 +474,7 @@ export const TaskItem = memo(function TaskItem({ task, showProject = true }: Tas
                   </button>
                 );
               })}
+              {openIconPosition === 'after-text' && <OpenFileButton path={task.filePath} />}
             </div>
 
             {/* Checklist indicator */}
@@ -514,7 +516,7 @@ export const TaskItem = memo(function TaskItem({ task, showProject = true }: Tas
               </span>
             )}
             {getDeadlineDisplay()}
-            <OpenFileButton path={task.filePath} />
+            {openIconPosition === 'row-right' && <OpenFileButton path={task.filePath} />}
           </div>
         )}
       </div>

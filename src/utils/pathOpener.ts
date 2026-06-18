@@ -67,11 +67,19 @@ export function openersForPath(openers: PathOpenerInfo[], path: string): PathOpe
 }
 
 /**
- * The app to use for the default "Open" action: Obsidian when it's installed
- * and can open this path, otherwise `null` (caller falls back to the OS default).
+ * The app to use for the default "Open" action: the user's `preferredAppId`
+ * when it's installed and can open this path, else Obsidian when available,
+ * else `null` (caller falls back to the OS default).
  */
-export function defaultOpener(openers: PathOpenerInfo[], path: string): string | null {
+export function defaultOpener(
+  openers: PathOpenerInfo[],
+  path: string,
+  preferredAppId?: string | null,
+): string | null {
   const usable = openersForPath(openers, path);
+  if (preferredAppId && usable.some((o) => o.appId === preferredAppId)) {
+    return preferredAppId;
+  }
   return usable.some((o) => o.appId === OBSIDIAN_APP_ID) ? OBSIDIAN_APP_ID : null;
 }
 
@@ -99,13 +107,24 @@ export function openTargetFor(path: string, appId: string): string {
   return extensionOf(path) ? containingDir(path) : path;
 }
 
-/** Open `path` with the default rule: Obsidian if available, else OS default. */
-export function openEntityFile(path: string, openers: PathOpenerInfo[]): Promise<void> {
-  const appId = defaultOpener(openers, path);
-  return appId ? openWith(path, appId) : openDefault(path);
+/** Open `path` with the default rule: preferred app, else Obsidian, else OS default. */
+export function openEntityFile(
+  path: string,
+  openers: PathOpenerInfo[],
+  preferredAppId?: string | null,
+): Promise<void> {
+  const appId = defaultOpener(openers, path, preferredAppId);
+  return appId ? openWith(openTargetFor(path, appId), appId) : openDefault(path);
 }
 
-/** Label for the default open action, reflecting where it will open. */
-export function openLabel(openers: PathOpenerInfo[], path: string): string {
-  return defaultOpener(openers, path) === OBSIDIAN_APP_ID ? 'Open in Obsidian' : 'Open';
+/** Label for the default open action, reflecting which app it will open in. */
+export function openLabel(
+  openers: PathOpenerInfo[],
+  path: string,
+  preferredAppId?: string | null,
+): string {
+  const appId = defaultOpener(openers, path, preferredAppId);
+  if (!appId) return 'Open';
+  const name = openers.find((o) => o.appId === appId)?.name;
+  return name ? `Open in ${name}` : 'Open';
 }

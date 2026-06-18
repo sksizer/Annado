@@ -172,3 +172,29 @@ lossy `createTask` recreate).
 
 - User request via `/sdlc:task-auto-define` on 2026-06-15. The request explicitly asked to investigate the operation protocol for undo; the investigation found `deleteTask` is the only un-undoable mutation (see `## Today`). The user chose the "faithful undo (backend `restore_task`)" scope over a button-only or lossy `createTask`-recreate approach.
 - Relevance refresh on 2026-06-17 (at `/sdlc:task-work` pickup): between authoring and pickup, perf PRs #11–#15 merged. PR #13 split the expanded editor out of `TaskItem.tsx` into a new `src/components/ExpandedTaskCard.tsx`, and PRs #14–#15 made the list virtualized + `content-visibility`. The `## Today`, `## Approach`, and `## Files to touch` sections were updated to retarget the expansion button to `ExpandedTaskCard.tsx` and to note the virtualization constraint on the inline overlay. Backend touchpoints were unaffected.
+
+## Post-mortem
+
+_Captured by /sdlc:task-work on 2026-06-17. PR: pending._
+
+### Acceptance criteria coverage
+
+- AC-1: agent-manual — verified `relative` title box + `absolute … opacity-0 group-hover:opacity-100` button by reading the diff; hover feel is deferred-user.
+- AC-2: agent-manual — button is position-absolute (no flex reflow) with a left-fading gradient backdrop; visual overlay on a full-width title is deferred-user.
+- AC-3: agent-manual — destructive "Delete" button present in `ExpandedTaskCard` bottom-toolbar right cluster.
+- AC-4: auto + agent-manual — `taskSlice.test.ts` covers delete→undo; the `confirmDelete`-gated `ConfirmModal` path verified via the shared `useConfirmableDelete` hook.
+- AC-5: auto — `cargo test vault::tests::test_delete_then_restore_is_byte_identical_and_keeps_id` (byte-identical file + same id).
+- AC-6: auto — `vitest` `taskSlice.test.ts` (one undo entry; running it invokes `restore_task` with the snapshot).
+- AC-7: auto — `pnpm run check` green (tsc, eslint, vitest 99/99, cargo 20/20), re-run independently.
+
+### What worked
+
+- The Step-2 relevance check caught the `TaskItem` → `ExpandedTaskCard` split before any code was written — exactly its purpose.
+- `## Files to touch` used symbol/file anchors, which survived the refactor; only the prose line-number hints drifted.
+- The faithful-undo design (snapshot the removed block + re-insert at the original index) round-trips byte-for-byte and preserves the positional `id`.
+
+### Friction and automation gaps
+
+- Spec drifted between authoring and pickup because 5 perf PRs merged in parallel — line-number hints in `## Today`/`## Approach` went stale while symbol anchors held. Prefer symbol/file anchors over line numbers in specs; line hints are write-once and rot under parallel work.
+- A pre-existing broken test mock (`src/utils/RenderTitleWithLinks.test.tsx`: `openUrl` mocked as bare `vi.fn()` while the component does `openUrl(...).catch(...)`) failed the entire `vitest` run on `main` — an unrelated one-line fix was required to get a green gate. Gap: a suite-breaking test landed on `main`, suggesting the merge path didn't run the full `pnpm run check`.
+- This repo has no `lease_authority` configured, so the formal `/sdlc:task-work` lease/worktree-orchestration protocol could not run; the run used an adapted flow (worktree + sub-agent + single PR, no lease ceremony). Gap: run `/sdlc:setup` or configure `lease_authority` if the full orchestration is wanted.

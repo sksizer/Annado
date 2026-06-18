@@ -2,7 +2,7 @@
 type: task
 schema_version: '5'
 id: T-E33U
-status: open/ready
+status: in-progress
 created: '2026-06-15'
 related: []
 tags: []
@@ -30,12 +30,14 @@ gap so an accidental delete is recoverable with ⌘Z.
 
 | Location | Role today |
 |---|---|
-| `src/components/TaskItem.tsx` | Renders both the collapsed Todo row and the expanded card. The outer card already carries the Tailwind `group` class (line 363); the collapsed title sits in a `flex-1 min-w-0` box (line 444); the expanded card's bottom toolbar has a right-side cluster with only an "open in editor" link (lines 727–739). No delete affordance exists on either surface. |
+| `src/components/TaskItem.tsx#CollapsedTaskRow` | Since the perf split (PR #13), this file is a thin wrapper: `CollapsedTaskRow` renders the collapsed row and `TaskItem` delegates the expanded editor to `ExpandedTaskCard`. The collapsed card carries `task-row-cv group cursor-pointer` (line 164); the title sits in a `flex-1 min-w-0` box (line 205); right-side indicators are a `flex-shrink-0` cluster (line 257). No delete affordance. |
+| `src/components/ExpandedTaskCard.tsx` | The expanded editor card (split out of TaskItem by PR #13). Its bottom toolbar (line 448) has a right-side cluster (line 491) holding only an "open in editor" link. No delete affordance. |
+| `src/components/TaskList.tsx` | Renders the inbox/flat lists; now virtualized via `@tanstack/react-virtual` (PR #15) with `content-visibility` rows (`task-row-cv`, PR #14) — relevant because the inline hover button must not disturb virtual row-height measurement. |
 | `src/stores/slices/taskSlice.ts` | Zustand task slice. A global undo stack (`pushUndo` / `undoLastAction`, lines 112–141) records an inverse for every mutation — `updateTask`, `updateMultipleTasks`, `createTask`, `toggleTaskComplete`, `toggleChecklistItem` — **except `deleteTask` (line 448), which pushes nothing.** `createTask` only accepts `{title, when}`, so it cannot rebuild a deleted task's notes/checklist/tags/etc. |
-| `src/hooks/useKeyboardHandler.ts` | Binds ⌘Z → `undoLastAction` (line 62) and ⌘⌫ delete, which routes through the `confirmDelete` setting + the App-level ConfirmModal (lines 142–154). |
+| `src/hooks/useKeyboardHandler.ts` | Binds ⌘Z → `undoLastAction` and ⌘⌫ delete, which routes through the `confirmDelete` setting + the App-level ConfirmModal. |
 | `src/components/ConfirmModal.tsx` | Reusable confirm dialog (`open`/`message`/`onConfirm`/`onCancel`); the existing delete-confirmation UI. |
-| `src-tauri/src/vault.rs` | `delete_task` (line 2747) locates the task's markdown block `[line_index, end_of_content)`, rewrites the file without it, and drops it from cache — keeping **no copy**. `create_task` (line 752) mints `id` from `generate_id(file_path, line_number)`, so a recreated task at a new line gets a *new* id. |
-| `src-tauri/src/commands.rs` | Tauri command wrappers; `delete_task` returns `Result<(), String>` (line 603) and discards the removed content. |
+| `src-tauri/src/vault.rs` | `delete_task` (line 2765) locates the task's markdown block `[line_index, end_of_content)`, rewrites the file without it, and drops it from cache — keeping **no copy**. `create_task` (line 770) mints `id` from `generate_id(file_path, line_number)`, so a recreated task at a new line gets a *new* id. |
+| `src-tauri/src/commands.rs` | Tauri command wrappers; `delete_task` returns `Result<(), String>` (line 618) and discards the removed content. |
 | `src-tauri/src/lib.rs` | `generate_handler!` registers every command (line 327; `delete_task` at line 338). |
 | `src/types/task.ts` | `Task` and `CreateTaskPayload` types; there is no snapshot type describing a deleted task for restoration. |
 
@@ -95,23 +97,32 @@ lossy `createTask` recreate).
    and merges the returned `Task` back into `tasks`. The existing `isUndoing`
    guard already prevents the `createTask` → `deleteTask` undo path from
    recording a second entry.
-6. **Inline row button (`src/components/TaskItem.tsx`).** Give the collapsed
-   title-content box (`flex-1 min-w-0`, line 444) `relative`, and render a
-   trash-icon button as `absolute right-0 top-1/2 -translate-y-1/2 opacity-0
-   group-hover:opacity-100 transition-opacity` with a left-fading gradient /
-   solid backdrop so it stays legible when overlaying a full-width title.
-   `onClick` calls `e.stopPropagation()` then the delete handler (step 8).
-7. **Expansion button (`src/components/TaskItem.tsx`).** Add a destructive
-   "Delete" button (trash icon, red text) to the expanded bottom toolbar's
-   right-side cluster (next to the editor link, lines 727–739), calling the
-   same delete handler.
-8. **Confirm + delete handler (`src/components/TaskItem.tsx`).** Pull
-   `deleteTask` and `confirmDelete` from the store and a local
-   `const [confirmingDelete, setConfirmingDelete] = useState(false)`. The
-   handler: if `confirmDelete` → open a self-contained `<ConfirmModal>`
+6. **Inline row button (`src/components/TaskItem.tsx#CollapsedTaskRow`).**
+   Give the collapsed title-content box (`flex-1 min-w-0`, line 205)
+   `relative`, and render a trash-icon button as `absolute right-0 top-1/2
+   -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity`
+   with a left-fading gradient / solid backdrop so it stays legible when
+   overlaying a full-width title. The button must be position-absolute (not a
+   flex sibling) so it adds no height to the row — the list is virtualized
+   (`@tanstack/react-virtual`) and rows are `content-visibility: auto`
+   (`task-row-cv`), so a hover affordance that changed measured row height
+   would jitter the virtual list. `onClick` calls `e.stopPropagation()` then
+   the delete handler (step 8).
+7. **Expansion button (`src/components/ExpandedTaskCard.tsx`).** Add a
+   destructive "Delete" button (trash icon, red text) to the expanded bottom
+   toolbar's right-side cluster (next to the editor link, line 491), calling
+   the same delete handler. NOTE: the expanded editor now lives in
+   `ExpandedTaskCard.tsx`, not `TaskItem.tsx` — this is where the toolbar
+   moved in PR #13.
+8. **Confirm + delete handler (shared).** In each of `CollapsedTaskRow` and
+   `ExpandedTaskCard`, pull `deleteTask` and `confirmDelete` from the store
+   and a local `const [confirmingDelete, setConfirmingDelete] = useState(false)`.
+   The handler: if `confirmDelete` → open a self-contained `<ConfirmModal>`
    whose `onConfirm` runs `deleteTask(task.id)`; else delete immediately.
-   Keep it local to TaskItem to avoid threading App-level modal state into
-   the memoized row.
+   Keep it local to each component to avoid threading App-level modal state
+   into the memoized row. (A small shared `useConfirmableDelete(task)` hook
+   returning `{ requestDelete, confirmModal }` is acceptable to avoid
+   duplicating the confirm wiring across the two surfaces.)
 9. **Tests.** Add a `#[test]` in `src-tauri/src/vault.rs`'s `mod tests` that
    creates a task with notes + checklist, snapshots it via `delete_task`,
    restores via `restore_task`, and asserts the file content is byte-identical
@@ -131,7 +142,8 @@ lossy `createTask` recreate).
 | `src-tauri/src/lib.rs` | modify | Register `restore_task` in `generate_handler!` (and imports). |
 | `src/types/task.ts` | modify | Add `DeletedTaskSnapshot` type. |
 | `src/stores/slices/taskSlice.ts#deleteTask` | modify | Capture snapshot, `pushUndo(restoreTask)`; add `restoreTask` action + interface entry. |
-| `src/components/TaskItem.tsx` | modify | Inline hover delete button (right-aligned, overlay on full-width), expanded-card Delete button, local ConfirmModal + delete handler. |
+| `src/components/TaskItem.tsx#CollapsedTaskRow` | modify | Inline hover delete button (absolute, right-aligned, overlay on full-width) + confirm/undo wiring. |
+| `src/components/ExpandedTaskCard.tsx` | modify | Destructive "Delete" button in the bottom-toolbar right cluster + confirm/undo wiring. |
 | `src/stores/slices/taskSlice.test.ts` | new | Vitest: `deleteTask` records one undo entry; undo invokes `restore_task`. |
 
 ## Acceptance criteria
@@ -159,3 +171,4 @@ lossy `createTask` recreate).
 ## Discovery context
 
 - User request via `/sdlc:task-auto-define` on 2026-06-15. The request explicitly asked to investigate the operation protocol for undo; the investigation found `deleteTask` is the only un-undoable mutation (see `## Today`). The user chose the "faithful undo (backend `restore_task`)" scope over a button-only or lossy `createTask`-recreate approach.
+- Relevance refresh on 2026-06-17 (at `/sdlc:task-work` pickup): between authoring and pickup, perf PRs #11–#15 merged. PR #13 split the expanded editor out of `TaskItem.tsx` into a new `src/components/ExpandedTaskCard.tsx`, and PRs #14–#15 made the list virtualized + `content-visibility`. The `## Today`, `## Approach`, and `## Files to touch` sections were updated to retarget the expansion button to `ExpandedTaskCard.tsx` and to note the virtualization constraint on the inline overlay. Backend touchpoints were unaffected.

@@ -215,6 +215,38 @@ fn collect_wikilink_names(
     (person_names, project_names)
 }
 
+/// Locate the folder that marks the end of a (possibly nested) pattern within
+/// the `/`-split components of a path.
+///
+/// `pattern` may be a single folder ("Persons") or a nested chain
+/// ("records/people"). Matching is per-segment with `contains`, so a pattern of
+/// "Persons" still matches an Obsidian-style "01. Persons" folder, and a nested
+/// "records/people" matches consecutive folders containing "records" then
+/// "people". The matched final segment must be a folder (a trailing `.md` file
+/// is never a match). Returns the index of that final folder component, or
+/// `None` if the pattern chain is not present.
+fn find_pattern_folder_idx(parts: &[&str], pattern: &str) -> Option<usize> {
+    let pat_segs: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
+    if pat_segs.is_empty() || parts.len() < pat_segs.len() {
+        return None;
+    }
+    for start in 0..=(parts.len() - pat_segs.len()) {
+        let end = start + pat_segs.len() - 1;
+        // The final matched component must be a folder, not the .md file itself.
+        if parts[end].ends_with(".md") {
+            continue;
+        }
+        let matched = pat_segs
+            .iter()
+            .enumerate()
+            .all(|(k, seg)| parts[start + k].contains(seg));
+        if matched {
+            return Some(end);
+        }
+    }
+    None
+}
+
 /// Append a marker like `@completed(2026-06-10)` to specific 1-based lines of a file.
 fn append_marker_to_lines(file_path: &Path, line_numbers: &[usize], marker: &str) {
     if let Ok(content) = fs::read_to_string(file_path) {
@@ -1308,16 +1340,11 @@ impl Vault {
             // Use whichever pattern matched to find the root folder index
             let active_pattern = if in_projects { projects_pattern.as_str() } else { areas_pattern.as_str() };
 
-            // Find the Projects/Areas folder index in the path
+            // Find the Projects/Areas folder within the path. The pattern may be
+            // nested (e.g. "work/projects"), so match the folder chain rather
+            // than a single slash-delimited component.
             let parts: Vec<&str> = path_str.split('/').collect();
-            let mut projects_idx: Option<usize> = None;
-
-            for (i, part) in parts.iter().enumerate() {
-                if part.contains(active_pattern) && !part.ends_with(".md") {
-                    projects_idx = Some(i);
-                    break;
-                }
-            }
+            let projects_idx = find_pattern_folder_idx(&parts, active_pattern);
 
             if let Some(idx) = projects_idx {
                 // For .md files inside the Projects folder
@@ -1401,16 +1428,11 @@ impl Vault {
                 continue;
             }
 
-            // Find the Persons folder index in the path
+            // Locate the Persons folder within the path. The pattern may be
+            // nested (e.g. "records/people"), so match the folder chain rather
+            // than a single slash-delimited component.
             let parts: Vec<&str> = path_str.split('/').collect();
-            let mut persons_idx: Option<usize> = None;
-
-            for (i, part) in parts.iter().enumerate() {
-                if part.contains(persons_pattern) && !part.ends_with(".md") {
-                    persons_idx = Some(i);
-                    break;
-                }
-            }
+            let persons_idx = find_pattern_folder_idx(&parts, persons_pattern);
 
             if persons_idx.is_some() {
                 // For .md files inside the Persons folder
@@ -2873,5 +2895,51 @@ mod tests {
         let excluded = vec!["Shopping List".to_string()];
         assert!(Vault::is_path_excluded(Path::new("/v/Shopping List.md"), vault, &excluded));
         assert!(!Vault::is_path_excluded(Path::new("/v/Shopping.md"), vault, &excluded));
+    }
+
+    fn parts(path: &str) -> Vec<&str> {
+        path.split('/').collect()
+    }
+
+    #[test]
+    fn test_find_pattern_folder_idx_single_level() {
+        // "/v/Persons/Alice.md" → Persons is index 2
+        let p = parts("/v/Persons/Alice.md");
+        assert_eq!(find_pattern_folder_idx(&p, "Persons"), Some(2));
+    }
+
+    #[test]
+    fn test_find_pattern_folder_idx_obsidian_numbered_folder() {
+        // Pattern "Persons" still matches an "01. Persons" folder (contains semantics)
+        let p = parts("/v/01. Persons/Alice.md");
+        assert_eq!(find_pattern_folder_idx(&p, "Persons"), Some(2));
+    }
+
+    #[test]
+    fn test_find_pattern_folder_idx_nested_pattern() {
+        // The regression: a two-deep pattern "records/people" must match the
+        // consecutive folders, returning the index of the final folder.
+        let p = parts("/v/records/people/Alice.md");
+        assert_eq!(find_pattern_folder_idx(&p, "records/people"), Some(3));
+    }
+
+    #[test]
+    fn test_find_pattern_folder_idx_nested_with_subfolder() {
+        // A person file nested one level below the pattern folder still resolves.
+        let p = parts("/v/records/people/Team/Alice.md");
+        assert_eq!(find_pattern_folder_idx(&p, "records/people"), Some(3));
+    }
+
+    #[test]
+    fn test_find_pattern_folder_idx_no_match() {
+        let p = parts("/v/notes/Alice.md");
+        assert_eq!(find_pattern_folder_idx(&p, "records/people"), None);
+    }
+
+    #[test]
+    fn test_find_pattern_folder_idx_only_in_filename_is_not_a_folder() {
+        // The pattern appearing only in a .md filename must not count as a folder.
+        let p = parts("/v/notes/People.md");
+        assert_eq!(find_pattern_folder_idx(&p, "People"), None);
     }
 }

@@ -1,13 +1,16 @@
 import { useState, useEffect } from 'react';
-import { open } from '@tauri-apps/plugin-dialog';
 import { getVersion } from '@tauri-apps/api/app';
 import { useTaskStore } from '../stores/taskStore';
 import { PROJECT_COLORS, DEFAULT_ACCENT } from '../utils/projectColors';
+import { normalizeTagInput } from '../utils/tags';
+import { filledRowClass, inlineActionButtonClass } from '../utils/styles';
 import { ScheduleBreak, DEFAULT_WORK_SCHEDULE } from '../features/agenda/types';
 import { Toggle } from './Toggle';
 import { KeybindingInput, KEYBINDING_DEFAULTS } from './KeybindingInput';
 import { NotificationSettings } from '../features/notifications/NotificationSettings';
 import { AboutSettings } from './AboutSettings';
+import { MigrateRecurrenceModal } from './MigrateRecurrenceModal';
+import { FormatPickerModal } from './FormatPickerModal';
 
 interface SettingsProps {
   isOpen: boolean;
@@ -51,10 +54,29 @@ type SettingsTab = 'general' | 'calendar' | 'shortcuts' | 'notifications' | 'abo
 
 
 export function SettingsModal({ isOpen, onClose }: SettingsProps) {
-  const { vaultPath, setVaultPath, keybindings, setKeybinding, folderPaths, setFolderPaths, theme, setTheme, accentColor, setAccentColor, excludedPaths, addExcludedPath, removeExcludedPath, calendarEnabled, setCalendarEnabled, availableCalendars, enabledCalendarNames, toggleCalendar, checkCalendarAccess, calendarAccessGranted, calendarBlockingDefaults, setCalendarBlocking, workSchedule, setWorkSchedule, sidebarCounts, setSidebarCount, showProjectCounts, setShowProjectCounts, weekStartsOn, setWeekStartsOn, agendaShowWeekends, setAgendaShowWeekends, defaultTaskDuration, setDefaultTaskDuration, confirmDelete, setConfirmDelete, isObsidianVault, setIsObsidianVault, editorType, editorCustomCommand, setEditorConfig } = useTaskStore();
-  const [isChangingVault, setIsChangingVault] = useState(false);
+  const { vaultPath, keybindings, setKeybinding, folderPaths, setFolderPaths, theme, setTheme, accentColor, setAccentColor, excludedPaths, addExcludedPath, removeExcludedPath, calendarEnabled, setCalendarEnabled, availableCalendars, enabledCalendarNames, toggleCalendar, checkCalendarAccess, calendarAccessGranted, calendarBlockingDefaults, setCalendarBlocking, workSchedule, setWorkSchedule, sidebarCounts, setSidebarCount, showProjectCounts, setShowProjectCounts, weekStartsOn, setWeekStartsOn, agendaShowWeekends, setAgendaShowWeekends, defaultTaskDuration, setDefaultTaskDuration, confirmDelete, setConfirmDelete, isObsidianVault, setIsObsidianVault, editorType, editorCustomCommand, setEditorConfig, setShowWelcome } = useTaskStore();
   const [localFolderPaths, setLocalFolderPaths] = useState(folderPaths);
   const [isSavingFolderPaths, setIsSavingFolderPaths] = useState(false);
+  const [migrateRecurrenceOpen, setMigrateRecurrenceOpen] = useState(false);
+  const [formatPickerOpen, setFormatPickerOpen] = useState(false);
+  const taskFormat = useTaskStore((s) => s.taskFormat);
+  const taskMarkerTag = useTaskStore((s) => s.taskMarkerTag);
+  const setTaskMarker = useTaskStore((s) => s.setTaskMarker);
+  const recurringTemplateCount = useTaskStore((s) => s.recurringTemplateCount);
+  // Import marker: a toggle (off = import all) that, when on, reveals the tag input
+  // (default "task"; editable to e.g. "taak"). Draft commits on blur/Enter.
+  const markerEnabled = taskMarkerTag !== '';
+  const [markerDraft, setMarkerDraft] = useState(taskMarkerTag || 'task');
+  useEffect(() => { if (taskMarkerTag) setMarkerDraft(taskMarkerTag); }, [taskMarkerTag]);
+  const commitMarker = () => {
+    const m = normalizeTagInput(markerDraft);
+    if (!m) { setMarkerDraft(taskMarkerTag); return; } // empty input → keep current marker
+    if (m !== taskMarkerTag) setTaskMarker(m);
+  };
+  const taskFormatLabel = taskFormat === 'obsidian_tasks' ? 'Obsidian Tasks'
+    : taskFormat === 'dataview' ? 'Dataview'
+    : taskFormat === 'annado' ? 'Annado'
+    : 'Not set';
   const [newExcludedPath, setNewExcludedPath] = useState('');
   const [calendarPermissionError, setCalendarPermissionError] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
@@ -86,7 +108,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
   };
 
   const folderPathsChanged =
-    localFolderPaths.recurringTemplates !== folderPaths.recurringTemplates ||
     localFolderPaths.projectsPattern !== folderPaths.projectsPattern ||
     localFolderPaths.personsPattern !== folderPaths.personsPattern ||
     localFolderPaths.dailyNotesFolder !== folderPaths.dailyNotesFolder ||
@@ -94,23 +115,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
 
   if (!isOpen) return null;
 
-  const handleChangeVault = async () => {
-    try {
-      setIsChangingVault(true);
-      const selected = await open({
-        directory: true,
-        title: 'Select your vault folder',
-      });
-
-      if (selected && typeof selected === 'string') {
-        await setVaultPath(selected);
-        onClose();
-      }
-    } catch (err) {
-      console.error('Failed to change vault:', err);
-    } finally {
-      setIsChangingVault(false);
-    }
+  // Return to the welcome screen, where the user can open another vault or start a fresh one.
+  // Doubles as the way to revisit the first-run welcome screen after a vault is set.
+  const handleSwitchVault = () => {
+    setShowWelcome(true);
+    onClose();
   };
 
   const vaultName = vaultPath?.split('/').pop() || 'Unknown';
@@ -193,19 +202,18 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
                     </div>
                   </div>
                   <button
-                    onClick={handleChangeVault}
-                    disabled={isChangingVault}
-                    className="px-3 py-1.5 text-[12px] font-medium text-primary hover:bg-primary/8 rounded-lg transition-colors disabled:opacity-50 flex-shrink-0"
+                    onClick={handleSwitchVault}
+                    className={`${inlineActionButtonClass} flex-shrink-0`}
                   >
-                    {isChangingVault ? 'Loading...' : 'Change'}
+                    Switch vault
                   </button>
                 </div>
               </div>
 
-              {/* Vault Type Section */}
+              {/* Vault & Task Type Section */}
               <div>
                 <h3 className="text-[10px] font-semibold text-[#B0B0B0] dark:text-[#555] uppercase tracking-wider mb-3">
-                  Vault Type
+                  Vault and Task Type
                 </h3>
                 <div className="flex items-center justify-between">
                   <div>
@@ -217,6 +225,55 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
                     </p>
                   </div>
                   <Toggle checked={isObsidianVault} onChange={setIsObsidianVault} />
+                </div>
+                <div className="flex items-center justify-between mt-4">
+                  <div>
+                    <p className="text-[13px] text-[#1A1A1A] dark:text-[#E0E0E0]">
+                      Task format: <span className="font-medium">{taskFormatLabel}</span>
+                    </p>
+                    <p className="text-[11px] text-[#B0B0B0] dark:text-[#555] mt-0.5">
+                      Annado reads Annado, Obsidian Tasks, and Dataview markers; it writes the format you choose here.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFormatPickerOpen(true)}
+                    className={inlineActionButtonClass}
+                  >
+                    Change…
+                  </button>
+                </div>
+                <div className="mt-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-[13px] text-[#1A1A1A] dark:text-[#E0E0E0]">Only import tagged checkboxes</span>
+                      <p className="text-[11px] text-[#B0B0B0] dark:text-[#555] mt-0.5">When on, Annado imports only checkboxes carrying the tag below. Off imports every checkbox.</p>
+                    </div>
+                    <Toggle
+                      checked={markerEnabled}
+                      onChange={(on) => setTaskMarker(on ? (normalizeTagInput(markerDraft) || 'task') : '')}
+                    />
+                  </div>
+                  {markerEnabled && (
+                    <div className="mt-3">
+                      <div className={`flex items-center gap-2.5 ${filledRowClass}`}>
+                        <span className="text-[13px] text-[#9A9A9A] dark:text-[#777] select-none">#</span>
+                        <span className="w-px h-3.5 bg-[#E0E0E0] dark:bg-[#444]" />
+                        <input
+                          type="text"
+                          value={markerDraft}
+                          onChange={(e) => setMarkerDraft(e.target.value)}
+                          onBlur={commitMarker}
+                          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                          placeholder="task"
+                          spellCheck={false}
+                          autoCapitalize="off"
+                          className="flex-1 min-w-0 bg-transparent text-[13px] text-[#1A1A1A] dark:text-[#E8E8E8] placeholder-[#B0B0B0] dark:placeholder-[#666] focus:outline-none"
+                        />
+                      </div>
+                      <p className="mt-1.5 text-[11px] text-[#B0B0B0] dark:text-[#555]">Checkboxes must include this tag to be imported.</p>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -387,7 +444,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
                   {excludedPaths.length > 0 && (
                     <div className="space-y-1.5">
                       {excludedPaths.map((path) => (
-                        <div key={path} className="flex items-center justify-between py-1.5 px-3 bg-[#FAFAFA] dark:bg-[#2F2F2F] rounded-lg">
+                        <div key={path} className={`flex items-center justify-between ${filledRowClass}`}>
                           <span className="text-[13px] text-[#1A1A1A] dark:text-[#E0E0E0] truncate mr-2">{path}</span>
                           <button
                             onClick={() => removeExcludedPath(path)}
@@ -433,27 +490,38 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
                 </div>
               </div>
 
+              {/* Legacy Recurring Tasks — only shown when the old template format is detected */}
+              {recurringTemplateCount > 0 && (
+                <div>
+                  <h3 className="text-[10px] font-semibold text-[#B0B0B0] dark:text-[#555] uppercase tracking-wider mb-3">
+                    Legacy Recurring Tasks
+                  </h3>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-[13px] text-[#1A1A1A] dark:text-[#E0E0E0]">
+                        Your vault has {recurringTemplateCount} task{recurringTemplateCount === 1 ? '' : 's'} in Annado&rsquo;s old template format.
+                      </p>
+                      <p className="text-[11px] text-[#B0B0B0] dark:text-[#555] mt-0.5">
+                        Convert them to the inline @repeat(…) format (a backup is made first).
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setMigrateRecurrenceOpen(true)}
+                      className="px-3 py-1.5 text-[12px] text-success border border-success/40 rounded-lg hover:bg-success/10 transition-colors whitespace-nowrap"
+                    >
+                      Convert…
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Folder Paths Section */}
               <div>
                 <h3 className="text-[10px] font-semibold text-[#B0B0B0] dark:text-[#555] uppercase tracking-wider mb-3">
                   Folder Paths
                 </h3>
                 <div className="space-y-4">
-                  <div>
-                    <label className="block text-[13px] text-[#1A1A1A] dark:text-[#E0E0E0] mb-1.5">
-                      Recurring Templates Folder
-                    </label>
-                    <input
-                      type="text"
-                      value={localFolderPaths.recurringTemplates}
-                      onChange={(e) => handleFolderPathChange('recurringTemplates', e.target.value)}
-                      className="w-full px-3 py-2 text-[13px] bg-transparent border-b border-[#E8E8E8] dark:border-[#3A3A3A] text-[#1A1A1A] dark:text-[#E0E0E0] placeholder-[#C0C0C0] dark:placeholder-[#555] focus:outline-none focus:border-primary/40 transition-colors"
-                      placeholder="12. System/recurring-tasks"
-                    />
-                    <p className="mt-1.5 text-[11px] text-[#B0B0B0] dark:text-[#555]">
-                      Relative path from vault root where recurring task templates are stored
-                    </p>
-                  </div>
                   <div>
                     <label className="block text-[13px] text-[#1A1A1A] dark:text-[#E0E0E0] mb-1.5">
                       Projects Folder Pattern
@@ -982,6 +1050,15 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
           </p>
         </div>
       </div>
+
+      <MigrateRecurrenceModal
+        isOpen={migrateRecurrenceOpen}
+        onClose={() => setMigrateRecurrenceOpen(false)}
+      />
+      <FormatPickerModal
+        isOpen={formatPickerOpen}
+        onClose={() => setFormatPickerOpen(false)}
+      />
     </div>
   );
 }

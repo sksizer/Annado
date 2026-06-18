@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef, useLayoutEffect, ReactNode, useMemo } from 'react';
+import { useState, useEffect, useRef, useLayoutEffect, useCallback, ReactNode, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useDroppable, useDraggable, DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core';
-import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import { useDroppable, useDraggable } from '@dnd-kit/core';
+import { arrayMove } from '@dnd-kit/sortable';
+import { SortableList, SortableItem } from './Sortable';
 import { useTaskStore } from '../stores/taskStore';
 import { getTaskDate, limitGroupedTasks, groupTasksByCompletionDate, groupTasksByProject } from '../utils/taskGrouping';
 import { usePanelState, usePanelTaskState } from '../hooks/usePanelState';
@@ -11,10 +11,11 @@ import { WikilinkNamesProvider } from '../contexts/WikilinkNamesContext';
 import { usePanelId } from '../contexts/PanelContext';
 import { TaskItem } from './TaskItem';
 import { BulkActions } from './BulkActions';
-import { ViewType, Task, ProjectMetadata, PersonMetadata, RecurringTemplate, CalendarEvent, Milestone } from '../types/task';
+import { ViewType, Task, ProjectMetadata, PersonMetadata, CalendarEvent, Milestone } from '../types/task';
 import { getProjectColor, getTagColor } from '../utils/projectColors';
 import { openInEditor, editorLabel } from '../utils/openInEditor';
 import { viewIcons, PersonIcon, TagIcon } from '../utils/viewIcons';
+import { splitTagPath } from '../utils/tags';
 import { formatDateForDisplay, getDateGroup, formatDeadlineShort, getDeadlineUrgency, DEADLINE_URGENCY_COLORS, formatDeadlineCountdown, parseLocalDate, getToday, getDaySections, DaySection, formatDateForStorage } from '../utils/dates';
 import { InlineMarkdown } from './MarkdownNotesRenderer';
 import { useWikilinkProps } from '../hooks/useWikilinkProps';
@@ -227,11 +228,15 @@ type TaskRow =
  */
 function VirtualTaskList({
   rows,
-  scrollRef,
+  scrollElement,
   footer,
 }: {
   rows: TaskRow[];
-  scrollRef: React.RefObject<HTMLDivElement | null>;
+  // The scroll container, passed as the element (via parent state) rather than a ref: a child's
+  // layout effect runs before its parent's ref attaches, so reading an ancestor ref on mount
+  // yields null and react-virtual renders zero rows until a later re-render. State is non-null
+  // by the time the virtualizer reads it.
+  scrollElement: HTMLDivElement | null;
   footer?: ReactNode;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
@@ -241,15 +246,15 @@ function VirtualTaskList({
   // calendar block can render above it). Recompute when the row set changes.
   useLayoutEffect(() => {
     const list = listRef.current;
-    const scroller = scrollRef.current;
+    const scroller = scrollElement;
     if (!list || !scroller) return;
     const offset = list.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
     setScrollMargin(offset);
-  }, [scrollRef, rows.length]);
+  }, [scrollElement, rows.length]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
-    getScrollElement: () => scrollRef.current,
+    getScrollElement: () => scrollElement,
     estimateSize: () => 44,
     overscan: 10,
     getItemKey: (index) => rows[index].key,
@@ -422,25 +427,31 @@ function DeadlineBadgeGroup({
 }
 
 // Recurring template item for the Recurring view
-function RecurringTemplateItem({
-  template,
+function RecurringTaskItem({
+  task,
   onClick,
 }: {
-  template: RecurringTemplate;
+  task: Task;
   onClick: () => void;
 }) {
   const { setSelectedProject, setSelectedPerson } = usePanelState();
   const wikilinkProps = useWikilinkProps({ onPersonClick: setSelectedPerson, onProjectClick: setSelectedProject });
 
-  const recurrenceLabel = template.recurrenceType === 'fixed'
-    ? `Every ${template.interval} ${template.intervalUnit}`
-    : `${template.interval} ${template.intervalUnit} after completion`;
+  const rec = task.recurrence;
+  const unit = rec ? (rec.interval === 1 ? rec.unit.replace(/s$/, '') : rec.unit) : '';
+  const recurrenceLabel = !rec
+    ? ''
+    : rec.raw
+      ? rec.raw
+      : rec.mode === 'fixed'
+        ? `Every ${rec.interval} ${unit}`
+        : `Every ${rec.interval} ${unit} after completion`;
 
+  const nextDate = typeof task.when === 'object' && task.when && 'date' in task.when ? task.when.date : null;
   const formatDate = (dateStr: string | null): string | null => {
     if (!dateStr) return null;
     try {
-      const date = new Date(dateStr);
-      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     } catch {
       return dateStr;
     }
@@ -461,18 +472,18 @@ function RecurringTemplateItem({
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="text-[14px] text-[#1A1A1A] dark:text-[#E8E8E8] font-normal truncate">
-          <InlineMarkdown text={template.title} wikilinkProps={wikilinkProps} />
+          <InlineMarkdown text={task.title} wikilinkProps={wikilinkProps} />
         </div>
         <div className="flex items-center gap-3 mt-0.5">
           <span className="text-[12px] text-[#888] dark:text-[#777]">
             {recurrenceLabel}
           </span>
-          {template.projects.length > 0 && (
+          {task.projects.length > 0 && (
             <span className="flex items-center gap-1 text-[11px] text-[#888] dark:text-[#777]">
               <svg className="w-3 h-3 text-primary" viewBox="0 0 24 24" fill="currentColor">
                 <circle cx="12" cy="12" r="5" />
               </svg>
-              {template.projects[0]}
+              {task.projects[0]}
             </span>
           )}
         </div>
@@ -480,14 +491,9 @@ function RecurringTemplateItem({
 
       {/* Right side info */}
       <div className="flex items-center gap-3 flex-shrink-0">
-        {template.startDate && (
+        {nextDate && (
           <span className="text-[11px] text-[#888] dark:text-[#666]">
-            Starts: {formatDate(template.startDate)}
-          </span>
-        )}
-        {template.lastGenerated && (
-          <span className="text-[11px] text-[#888] dark:text-[#666]">
-            Last: {formatDate(template.lastGenerated)}
+            Next: {formatDate(nextDate)}
           </span>
         )}
       </div>
@@ -628,40 +634,6 @@ function EditableDateField({
   );
 }
 
-// Sortable wrapper for a single milestone row. Owns the row's flex container and
-// the grip handle (only the handle initiates a drag, so the inline name/date
-// editors stay clickable); the row's existing content is passed as children.
-function SortableMilestoneRow({
-  id,
-  children,
-}: {
-  id: string;
-  children: ReactNode;
-}) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-  };
-  return (
-    <div ref={setNodeRef} style={style} className="flex items-center gap-2 group text-[12.5px]">
-      {/* Drag handle */}
-      <button
-        {...attributes}
-        {...listeners}
-        className="relative z-20 opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing text-[#CCC] dark:text-[#555] hover:text-[#999] dark:hover:text-[#888] transition-all flex-shrink-0 touch-none"
-        aria-label="Drag to reorder milestone"
-      >
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-          <path d="M4 7h16M4 12h16M4 17h16" />
-        </svg>
-      </button>
-      {children}
-    </div>
-  );
-}
-
 // Milestone list for project info panel
 function MilestoneList({
   milestones,
@@ -670,21 +642,6 @@ function MilestoneList({
   milestones: Milestone[];
   onUpdate: (milestones: Milestone[]) => void;
 }) {
-  // Drag-to-reorder: reordering the array is the persistence — onUpdate flows to
-  // saveProjectMetadata which writes the milestones array in order.
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
-  );
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
-    if (over && active.id !== over.id) {
-      const oldIndex = Number(active.id);
-      const newIndex = Number(over.id);
-      if (Number.isNaN(oldIndex) || Number.isNaN(newIndex)) return;
-      onUpdate(arrayMove(milestones, oldIndex, newIndex));
-    }
-  };
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingField, setEditingField] = useState<'name' | 'start' | 'end' | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -745,102 +702,117 @@ function MilestoneList({
       <div className="text-[10px] font-bold text-[#9b9eb0] dark:text-[#777] tracking-[0.06em] uppercase mb-1.5">
         Milestones
       </div>
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <SortableContext items={milestones.map((_, i) => String(i))} strategy={verticalListSortingStrategy}>
-          <div className="space-y-1">
-            {milestones.map((m, i) => {
-              const endUrgency = m.end && !m.completed ? getDeadlineUrgency(m.end) : null;
-              const endColor = endUrgency ? DEADLINE_URGENCY_COLORS[endUrgency] : undefined;
-              return (
-                <SortableMilestoneRow key={i} id={String(i)}>
-                  {/* Checkbox */}
-                  <button
-                    onClick={() => toggleCompleted(i)}
-                    className="flex-shrink-0 w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors"
-                    style={{
-                      borderColor: m.completed ? '#43A047' : '#ccc',
-                      background: m.completed ? '#43A047' : 'transparent',
-                    }}
-                  >
-                    {m.completed && (
-                      <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                        <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    )}
-                  </button>
-                  {/* Name */}
-                  {editingIndex === i && editingField === 'name' ? (
-                    <input
-                      value={editValue}
-                      onChange={(e) => setEditValue(e.target.value)}
-                      onBlur={commitEdit}
-                      onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') { setEditingIndex(null); setEditingField(null); } }}
-                      className="flex-1 min-w-0 px-1 py-0.5 text-[12.5px] bg-white dark:bg-[#2A2A2A] border border-[#E0E0E0] dark:border-[#3A3A3A] rounded focus:outline-none focus:border-primary"
-                      autoFocus
-                    />
-                  ) : (
-                    <button
-                      onClick={() => startEdit(i, 'name')}
-                      className={`flex-1 min-w-0 truncate text-left transition-colors hover:text-primary dark:hover:text-primary-light ${m.completed ? 'line-through text-[#AAA] dark:text-[#666]' : 'text-[#333] dark:text-[#CCC]'}`}
-                    >
-                      {m.name}
-                    </button>
-                  )}
-                  {/* Start date */}
-                  {editingIndex === i && editingField === 'start' ? (
-                    <input
-                      type="date"
-                      value={editValue}
-                      onChange={(e) => { setEditValue(e.target.value); }}
-                      onBlur={commitEdit}
-                      className="text-[11px] px-1 py-0.5 bg-white dark:bg-[#2A2A2A] border border-[#E0E0E0] dark:border-[#3A3A3A] rounded focus:outline-none focus:border-primary"
-                      autoFocus
-                    />
-                  ) : (
-                    <button
-                      onClick={() => startEdit(i, 'start')}
-                      className="text-[11px] text-[#999] dark:text-[#777] hover:text-primary dark:hover:text-primary-light flex-shrink-0"
-                    >
-                      {m.start ? formatDateForDisplay(m.start) : '—'}
-                    </button>
-                  )}
-                  <span className="text-[10px] text-[#CCC] dark:text-[#555]">→</span>
-                  {/* End date */}
-                  {editingIndex === i && editingField === 'end' ? (
-                    <input
-                      type="date"
-                      value={editValue}
-                      onChange={(e) => { setEditValue(e.target.value); }}
-                      onBlur={commitEdit}
-                      className="text-[11px] px-1 py-0.5 bg-white dark:bg-[#2A2A2A] border border-[#E0E0E0] dark:border-[#3A3A3A] rounded focus:outline-none focus:border-primary"
-                      autoFocus
-                    />
-                  ) : (
-                    <button
-                      onClick={() => startEdit(i, 'end')}
-                      className="text-[11px] flex-shrink-0"
-                      style={{ color: endColor || undefined }}
-                    >
-                      <span className={endColor ? '' : 'text-[#999] dark:text-[#777] hover:text-primary dark:hover:text-primary-light'}>
-                        {m.end ? formatDateForDisplay(m.end) : '—'}
-                      </span>
-                    </button>
-                  )}
-                  {/* Remove button */}
-                  <button
-                    onClick={() => removeMilestone(i)}
-                    className="opacity-0 group-hover:opacity-100 text-[#CCC] dark:text-[#555] hover:text-danger transition-all flex-shrink-0"
-                  >
-                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
-                    </svg>
-                  </button>
-                </SortableMilestoneRow>
-              );
-            })}
-          </div>
-        </SortableContext>
-      </DndContext>
+      <SortableList
+        ids={milestones.map((_, i) => String(i))}
+        onReorder={(from, to) => onUpdate(arrayMove(milestones, Number(from), Number(to)))}
+      >
+      <div className="space-y-1">
+        {milestones.map((m, i) => {
+          const endUrgency = m.end && !m.completed ? getDeadlineUrgency(m.end) : null;
+          const endColor = endUrgency ? DEADLINE_URGENCY_COLORS[endUrgency] : undefined;
+          return (
+            <SortableItem key={i} id={String(i)}>
+              {({ handleProps }) => (
+            <div className="flex items-center gap-2 group text-[12.5px]">
+              {/* Drag handle — only this initiates a drag, so inline editors stay clickable */}
+              <button
+                {...handleProps}
+                className="relative z-20 opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing text-[#CCC] dark:text-[#555] hover:text-[#999] dark:hover:text-[#888] transition-all flex-shrink-0 touch-none"
+                aria-label="Drag to reorder milestone"
+              >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <path d="M4 7h16M4 12h16M4 17h16" />
+                </svg>
+              </button>
+              {/* Checkbox */}
+              <button
+                onClick={() => toggleCompleted(i)}
+                className="flex-shrink-0 w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors"
+                style={{
+                  borderColor: m.completed ? '#43A047' : '#ccc',
+                  background: m.completed ? '#43A047' : 'transparent',
+                }}
+              >
+                {m.completed && (
+                  <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                    <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                )}
+              </button>
+              {/* Name */}
+              {editingIndex === i && editingField === 'name' ? (
+                <input
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  onBlur={commitEdit}
+                  onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') { setEditingIndex(null); setEditingField(null); } }}
+                  className="flex-1 min-w-0 px-1 py-0.5 text-[12.5px] bg-white dark:bg-[#2A2A2A] border border-[#E0E0E0] dark:border-[#3A3A3A] rounded focus:outline-none focus:border-primary"
+                  autoFocus
+                />
+              ) : (
+                <button
+                  onClick={() => startEdit(i, 'name')}
+                  className={`flex-1 min-w-0 truncate text-left transition-colors hover:text-primary dark:hover:text-primary-light ${m.completed ? 'line-through text-[#AAA] dark:text-[#666]' : 'text-[#333] dark:text-[#CCC]'}`}
+                >
+                  {m.name}
+                </button>
+              )}
+              {/* Start date */}
+              {editingIndex === i && editingField === 'start' ? (
+                <input
+                  type="date"
+                  value={editValue}
+                  onChange={(e) => { setEditValue(e.target.value); }}
+                  onBlur={commitEdit}
+                  className="text-[11px] px-1 py-0.5 bg-white dark:bg-[#2A2A2A] border border-[#E0E0E0] dark:border-[#3A3A3A] rounded focus:outline-none focus:border-primary"
+                  autoFocus
+                />
+              ) : (
+                <button
+                  onClick={() => startEdit(i, 'start')}
+                  className="text-[11px] text-[#999] dark:text-[#777] hover:text-primary dark:hover:text-primary-light flex-shrink-0"
+                >
+                  {m.start ? formatDateForDisplay(m.start) : '—'}
+                </button>
+              )}
+              <span className="text-[10px] text-[#CCC] dark:text-[#555]">→</span>
+              {/* End date */}
+              {editingIndex === i && editingField === 'end' ? (
+                <input
+                  type="date"
+                  value={editValue}
+                  onChange={(e) => { setEditValue(e.target.value); }}
+                  onBlur={commitEdit}
+                  className="text-[11px] px-1 py-0.5 bg-white dark:bg-[#2A2A2A] border border-[#E0E0E0] dark:border-[#3A3A3A] rounded focus:outline-none focus:border-primary"
+                  autoFocus
+                />
+              ) : (
+                <button
+                  onClick={() => startEdit(i, 'end')}
+                  className="text-[11px] flex-shrink-0"
+                  style={{ color: endColor || undefined }}
+                >
+                  <span className={endColor ? '' : 'text-[#999] dark:text-[#777] hover:text-primary dark:hover:text-primary-light'}>
+                    {m.end ? formatDateForDisplay(m.end) : '—'}
+                  </span>
+                </button>
+              )}
+              {/* Remove button */}
+              <button
+                onClick={() => removeMilestone(i)}
+                className="opacity-0 group-hover:opacity-100 text-[#CCC] dark:text-[#555] hover:text-danger transition-all flex-shrink-0"
+              >
+                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+              )}
+            </SortableItem>
+          );
+        })}
+      </div>
+      </SortableList>
       {/* Add milestone */}
       {addingNew ? (
         <div className="flex items-center gap-2 mt-1.5">
@@ -873,7 +845,7 @@ function hasPersonMetadataContent(metadata: PersonMetadata | null): boolean {
 }
 
 interface TaskListProps {
-  onOpenRecurringModal?: (template?: RecurringTemplate) => void;
+  onOpenRecurringModal?: (task?: Task) => void;
 }
 
 export function TaskList({ onOpenRecurringModal }: TaskListProps) {
@@ -885,8 +857,9 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
     selectedTag,
     getFilteredTasks,
     setSelectedProject,
+    setSelectedTag,
   } = usePanelState();
-  const { selectedPersonMetadata, isLoading, vaultPath, availableProjects, availablePeople, projectColors, tagColors, updateProjectMetadata, recurringTemplates, sidePanelOpen, toggleSidePanel, calendarEnabled, calendarEvents, smartLists, selectedSmartListId, isObsidianVault, editorType, editorCustomCommand } = useTaskStore(useShallow((s) => ({ selectedPersonMetadata: s.selectedPersonMetadata, isLoading: s.isLoading, vaultPath: s.vaultPath, availableProjects: s.availableProjects, availablePeople: s.availablePeople, projectColors: s.projectColors, tagColors: s.tagColors, updateProjectMetadata: s.updateProjectMetadata, recurringTemplates: s.recurringTemplates, sidePanelOpen: s.sidePanelOpen, toggleSidePanel: s.toggleSidePanel, calendarEnabled: s.calendarEnabled, calendarEvents: s.calendarEvents, smartLists: s.smartLists, selectedSmartListId: s.selectedSmartListId, isObsidianVault: s.isObsidianVault, editorType: s.editorType, editorCustomCommand: s.editorCustomCommand, })));
+  const { selectedPersonMetadata, isLoading, vaultPath, availableProjects, availablePeople, projectColors, tagColors, updateProjectMetadata, sidePanelOpen, toggleSidePanel, calendarEnabled, calendarEvents, smartLists, selectedSmartListId, isObsidianVault, editorType, editorCustomCommand } = useTaskStore(useShallow((s) => ({ selectedPersonMetadata: s.selectedPersonMetadata, isLoading: s.isLoading, vaultPath: s.vaultPath, availableProjects: s.availableProjects, availablePeople: s.availablePeople, projectColors: s.projectColors, tagColors: s.tagColors, updateProjectMetadata: s.updateProjectMetadata, sidePanelOpen: s.sidePanelOpen, toggleSidePanel: s.toggleSidePanel, calendarEnabled: s.calendarEnabled, calendarEvents: s.calendarEvents, smartLists: s.smartLists, selectedSmartListId: s.selectedSmartListId, isObsidianVault: s.isObsidianVault, editorType: s.editorType, editorCustomCommand: s.editorCustomCommand, })));
   // getFilteredTasks() reads tasks and completion-linger from the store via
   // getState(), which is not a subscription. usePanelState no longer re-renders
   // this component on selection/expansion (those are per-row now), so subscribe
@@ -1071,7 +1044,11 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
   }), [availablePeople, availableProjects]);
 
   // Scroll container for the virtualized list.
-  const scrollRef = useRef<HTMLDivElement>(null);
+  // The scroll container is tracked as state (set from a callback ref) rather than a plain ref, so
+  // VirtualTaskList re-renders once the element attaches — otherwise the virtualizer reads a
+  // not-yet-attached ancestor ref on first mount and renders zero rows until the next render.
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const setScrollNode = useCallback((node: HTMLDivElement | null) => setScrollEl(node), []);
 
   // Flatten the grouped-by-project view (headers + tasks + evening section) into
   // a single row array for virtualization.
@@ -1148,6 +1125,9 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
     ? (selectedSmartList?.name ?? 'Smart List')
     : (selectedTag ? `#${selectedTag}` : selectedPerson || selectedProject || config.title);
 
+  // Split a nested tag (Obsidian-style parent/child) into breadcrumb + leaf title.
+  const tagParts = selectedTag ? splitTagPath(selectedTag) : null;
+
   const color = selectedTag
     ? getTagColor(selectedTag, tagColors)
     : selectedProjectInfo
@@ -1216,7 +1196,33 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
               <circle cx="12" cy="12" r="9" />
             </svg>
           )}
-          {(() => {
+          {selectedTag && tagParts ? (
+            // The focused (sub)tag title stays in the exact same position as a
+            // parent-less tag title; the parent breadcrumb floats just above it
+            // (absolute) so switching never shifts the title — only the crumb appears.
+            <div className="relative min-w-0">
+              {tagParts.crumbs.length > 0 && (
+                <div className="absolute bottom-full left-0 flex items-center gap-1 leading-none whitespace-nowrap text-[12px] font-medium text-[#888] dark:text-[#777]">
+                  {tagParts.crumbs.map((crumb) => (
+                    <span key={crumb.path} className="flex items-center gap-0.5">
+                      <button
+                        onClick={() => setSelectedTag(crumb.path)}
+                        className="hover:underline"
+                      >
+                        {crumb.label}
+                      </button>
+                      <svg className="w-3 h-3 opacity-60 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <h2 className="text-[26px] font-medium text-[#1A1A1A] dark:text-[#E8E8E8] truncate">
+                {`#${tagParts.leaf}`}
+              </h2>
+            </div>
+          ) : (() => {
             const personInfo = selectedPerson ? availablePeople.find(p => p.name === selectedPerson) : null;
             const targetPath = selectedProjectInfo?.path ?? personInfo?.path ?? null;
 
@@ -1397,11 +1403,14 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
       </div>
 
       {/* Task list */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto pb-20 pt-1">
-        {/* Recurring templates view */}
+      <div ref={setScrollNode} className="flex-1 overflow-y-auto pb-20 pt-1">
+        {/* Recurring tasks view */}
         {currentView === 'recurring' ? (
+          (() => {
+          const recurringTasks = allTasks.filter((t) => t.recurrence && !t.completed);
+          return (
           <div>
-            {recurringTemplates.length === 0 ? (
+            {recurringTasks.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-[#B0B0B0] dark:text-[#555]">
                 <svg
                   className="w-12 h-12 mb-3 opacity-40"
@@ -1416,15 +1425,17 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
                 <p className="text-[12px] mt-1 opacity-70">Press ⌘R to create one</p>
               </div>
             ) : (
-              recurringTemplates.map((template) => (
-                <RecurringTemplateItem
-                  key={template.templateId}
-                  template={template}
-                  onClick={() => onOpenRecurringModal?.(template)}
+              recurringTasks.map((task) => (
+                <RecurringTaskItem
+                  key={task.id}
+                  task={task}
+                  onClick={() => onOpenRecurringModal?.(task)}
                 />
               ))
             )}
           </div>
+          );
+          })()
         ) : (
         <>
         {currentView === 'today' && !selectedPerson && !selectedProject && !selectedTag && calendarEnabled && (() => {
@@ -1505,13 +1516,13 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
         ) : groupedTasks ? (
           // Render grouped by project
           <DroppableViewZone viewType={currentView}>
-            <VirtualTaskList rows={groupedRows} scrollRef={scrollRef} />
+            <VirtualTaskList rows={groupedRows} scrollElement={scrollEl} />
           </DroppableViewZone>
         ) : selectedProject ? (
           // Render project view — virtualized flat list
           <VirtualTaskList
             rows={flatRows}
-            scrollRef={scrollRef}
+            scrollElement={scrollEl}
             footer={
               <button
                 onClick={() => useTaskStore.getState().openQuickAdd({
@@ -1552,7 +1563,7 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
           // Render flat list (person/tag view) — virtualized
           <VirtualTaskList
             rows={flatRows}
-            scrollRef={scrollRef}
+            scrollElement={scrollEl}
             footer={selectedPerson ? (
               <button
                 onClick={() => useTaskStore.getState().openQuickAdd({

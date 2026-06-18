@@ -71,13 +71,33 @@ export function getProjectColor(
 /**
  * Get the color for a tag
  */
+/**
+ * Resolve a tag's own color, or the nearest ancestor's (inbox/to-read -> inbox),
+ * case-insensitively — mirrors getProjectColor's parent inheritance. Returns
+ * undefined when neither the tag nor any ancestor has a color set, so callers can
+ * distinguish "no color" (e.g. render neutral) from the default accent.
+ */
+export function resolveTagColor(
+  tagName: string,
+  tagColors: Record<string, string>
+): string | undefined {
+  // Tag colors are keyed by lowercase name (case-insensitive identity).
+  let key = tagName.toLowerCase();
+  for (;;) {
+    if (tagColors[key]) return tagColors[key];
+    const slash = key.lastIndexOf('/');
+    if (slash < 0) break;
+    key = key.slice(0, slash);
+  }
+  // Fall back to the exact key so colors set before lowercase-keying still resolve.
+  return tagColors[tagName];
+}
+
 export function getTagColor(
   tagName: string,
   tagColors: Record<string, string>
 ): string {
-  // Tag colors are keyed by lowercase name (case-insensitive identity); fall back
-  // to the exact key so colors set before this change still resolve.
-  return tagColors[tagName.toLowerCase()] || tagColors[tagName] || '#5C6BC0';
+  return resolveTagColor(tagName, tagColors) ?? '#5C6BC0';
 }
 
 export function filterTagSuggestions(

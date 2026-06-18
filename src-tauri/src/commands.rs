@@ -1,5 +1,5 @@
 use crate::calendar::{self, CalendarInfo, CalendarEvent};
-use crate::parser::{self, Task, WhenValue, RecurringTemplate, RecurrenceType, IntervalUnit};
+use crate::parser::{self, Task, WhenValue};
 use crate::vault::{FolderPaths, Milestone, PersonInfo, PersonMetadata, ProjectInfo, ProjectMetadata, Vault};
 use chrono::Local;
 use parking_lot::RwLock;
@@ -23,6 +23,13 @@ pub struct AppConfig {
     pub editor_type: String,
     #[serde(default)]
     pub editor_custom_command: String,
+    // Chosen write format ("annado" | "obsidian_tasks" | "dataview"). Empty = unset →
+    // the frontend shows the first-run format picker; writing stays Annado until chosen.
+    #[serde(default)]
+    pub task_format: String,
+    // Import marker tag (e.g. "task"). Empty = import every checkbox (default).
+    #[serde(default)]
+    pub task_marker_tag: String,
 }
 
 fn default_editor_type() -> String { "system".to_string() }
@@ -53,6 +60,8 @@ fn load_config(app: &AppHandle) -> AppConfig {
                 vault_path: Some(vault_path.trim().to_string()),
                 folder_paths: FolderPaths::default(),
                 excluded_paths: Vec::new(),
+                task_format: String::new(),
+                task_marker_tag: String::new(),
             };
             // Save migrated config and remove legacy file
             if let Some(config_path) = get_config_path(app) {
@@ -127,6 +136,8 @@ pub struct TaskUpdatePayload {
     pub duration_minutes: Option<Option<u32>>,  // None = not updated, Some(None) = remove, Some(Some(n)) = set
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
     pub scheduled_time: Option<Option<String>>,  // None = not updated, Some(None) = remove, Some(Some(s)) = set
+    #[serde(default, deserialize_with = "deserialize_optional_nullable")]
+    pub recurrence: Option<Option<crate::recurrence::Recurrence>>,  // None = not updated, Some(None) = remove, Some(Some(r)) = set
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -172,6 +183,8 @@ pub fn set_vault_path(path: String, app: AppHandle) -> Result<Vec<Task>, String>
 
     let mut vault = Vault::new_with_folder_paths(path_buf, config.folder_paths.clone(), config.is_obsidian_vault);
     vault.set_excluded_paths(config.excluded_paths.clone());
+    vault.set_task_format(crate::taskformat::TaskFormat::from_config(&config.task_format));
+    vault.set_task_marker(config.task_marker_tag.clone());
     let tasks = vault.scan();
 
     // NOTE: We do NOT call generate_recurring_instances() here because:
@@ -198,6 +211,56 @@ pub fn set_vault_path(path: String, app: AppHandle) -> Result<Vec<Task>, String>
     let _ = save_config(&app, &config);
 
     Ok(tasks)
+}
+
+/// Write a starter task file into a brand-new vault. Returns true if it wrote one.
+/// No-op (returns false) if the folder already contains any `.md` file at its top level,
+/// so picking an existing vault via "Start fresh" never clobbers it.
+fn scaffold_starter_file(path: &std::path::Path) -> bool {
+    let has_md = std::fs::read_dir(path)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .any(|e| e.path().extension().map_or(false, |x| x == "md"))
+        })
+        .unwrap_or(false);
+    if has_md {
+        return false;
+    }
+
+    let starter = "# Inbox\n\n\
+- [ ] Welcome to Annado — check me off @when(today)\n\
+- [ ] Write tasks anywhere in your markdown as `- [ ]` checkboxes\n\
+- [ ] Add a due date like @due(2026-12-31)\n";
+    std::fs::write(path.join("Inbox.md"), starter).is_ok()
+}
+
+/// "Start fresh": validate a writable folder, scaffold a first task file if the folder is
+/// empty of markdown, then load it exactly like opening an existing vault.
+#[tauri::command]
+pub fn create_vault(path: String, app: AppHandle) -> Result<Vec<Task>, String> {
+    let path_buf = PathBuf::from(&path);
+
+    if !path_buf.exists() {
+        return Err("Path does not exist".to_string());
+    }
+    if !path_buf.is_dir() {
+        return Err("Path is not a directory".to_string());
+    }
+    // Reject symlinks (mirrors set_vault_path).
+    if path_buf.read_link().is_ok() {
+        return Err("Symbolic links are not supported as vault paths".to_string());
+    }
+
+    // Verify write permission before scaffolding.
+    let test_file = path_buf.join(".annado_write_test");
+    std::fs::write(&test_file, "").map_err(|_| "No write permission to this directory".to_string())?;
+    let _ = std::fs::remove_file(&test_file);
+
+    scaffold_starter_file(&path_buf);
+
+    // Delegate to set_vault_path for config save, vault build, scan, and watcher start.
+    set_vault_path(path, app)
 }
 
 #[tauri::command]
@@ -281,6 +344,10 @@ pub fn update_task(payload: TaskUpdatePayload) -> Result<Task, String> {
         // Empty string means "remove" (JS sends "" because null becomes None and is skipped)
         task.scheduled_time = scheduled_time.filter(|s| !s.is_empty());
     }
+    if let Some(recurrence) = payload.recurrence {
+        // None (key absent) = unchanged; Some(None) = remove; Some(Some(r)) = set.
+        task.recurrence = recurrence;
+    }
 
     vault.update_task(task.clone())?;
 
@@ -311,12 +378,11 @@ pub fn toggle_task_complete(id: String) -> Result<Task, String> {
 
     vault.update_task(task.clone())?;
 
-    // If completing a recurring task instance, update the template's last_completed
+    // Roll forward: on completing a recurring task, write its next occurrence.
     if task.completed {
-        if let Some(ref template_id) = task.recurring_template_id {
-            let today = Local::now().date_naive();
-            let date_str = today.format("%Y-%m-%d").to_string();
-            let _ = vault.update_template_last_completed(template_id, &date_str);
+        let today = Local::now().date_naive();
+        if let Some(next) = crate::parser::next_occurrence(&task, today) {
+            let _ = vault.insert_task_after(&task.file_path, task.line_number, &next);
         }
     }
 
@@ -429,81 +495,69 @@ pub fn update_project_metadata(payload: UpdateProjectMetadataPayload) -> Result<
     with_vault_result(|vault| vault.update_project_metadata(&payload.project_name, &metadata))
 }
 
-// Recurring template commands
+// Recurrence migration (template model -> inline @repeat model)
+
+// Task format (read-any / write-chosen dialect)
 
 #[tauri::command]
-pub fn get_all_recurring_templates() -> Result<Vec<RecurringTemplate>, String> {
-    with_vault(|vault| vault.get_all_recurring_templates())
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateRecurringTemplatePayload {
-    pub title: String,
-    pub notes: Option<String>,
-    pub recurrence_type: RecurrenceType,
-    pub interval: u32,
-    pub interval_unit: IntervalUnit,
-    pub start_date: Option<String>,
-    pub project: Option<String>,
-    pub priority: Option<u8>,
-    pub tags: Option<Vec<String>>,
+pub fn get_task_format(app: AppHandle) -> String {
+    load_config(&app).task_format
 }
 
 #[tauri::command]
-pub fn create_recurring_template(payload: CreateRecurringTemplatePayload) -> Result<RecurringTemplate, String> {
-    with_vault_result(|vault| vault.create_recurring_template(
-        &payload.title,
-        payload.notes.as_deref(),
-        payload.recurrence_type,
-        payload.interval,
-        payload.interval_unit,
-        payload.start_date.as_deref(),
-        payload.project.as_deref(),
-        payload.priority,
-        payload.tags.unwrap_or_default(),
-    ))
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateRecurringTemplatePayload {
-    pub template_id: String,
-    pub title: Option<String>,
-    pub notes: Option<String>,
-    pub recurrence_type: Option<RecurrenceType>,
-    pub interval: Option<u32>,
-    pub interval_unit: Option<IntervalUnit>,
-    pub start_date: Option<String>,
-    pub project: Option<String>,
-    pub priority: Option<Option<u8>>,
-    pub tags: Option<Vec<String>>,
+pub fn set_task_format(task_format: String, app: AppHandle) -> Result<(), String> {
+    let mut config = load_config(&app);
+    config.task_format = task_format.clone();
+    save_config(&app, &config)?;
+    let mut vault_lock = get_vault_lock().write();
+    if let Some(ref mut vault) = *vault_lock {
+        vault.set_task_format(crate::taskformat::TaskFormat::from_config(&task_format));
+    }
+    Ok(())
 }
 
 #[tauri::command]
-pub fn update_recurring_template(payload: UpdateRecurringTemplatePayload) -> Result<RecurringTemplate, String> {
-    with_vault_result(|vault| vault.update_recurring_template(
-        &payload.template_id,
-        payload.title.as_deref(),
-        payload.notes.as_deref(),
-        payload.recurrence_type,
-        payload.interval,
-        payload.interval_unit,
-        payload.start_date.as_deref(),
-        payload.project.as_deref(),
-        payload.priority,
-        payload.tags,
-    ))
+pub fn get_task_marker(app: AppHandle) -> String {
+    load_config(&app).task_marker_tag
 }
 
 #[tauri::command]
-pub fn delete_recurring_template(template_id: String) -> Result<(), String> {
-    with_vault_result(|vault| vault.delete_recurring_template(&template_id))
+pub fn set_task_marker(task_marker: String, app: AppHandle) -> Result<Vec<Task>, String> {
+    let marker = crate::parser::normalize_marker(&task_marker);
+    let mut config = load_config(&app);
+    config.task_marker_tag = marker.clone();
+    save_config(&app, &config)?;
+    // Changing the marker changes which checkboxes import → update the vault and rescan.
+    let mut vault_lock = get_vault_lock().write();
+    if let Some(ref mut vault) = *vault_lock {
+        vault.set_task_marker(marker);
+        Ok(vault.scan())
+    } else {
+        Err("Vault not initialized".to_string())
+    }
 }
 
 #[tauri::command]
-pub fn generate_recurring_instances() -> Result<Vec<Task>, String> {
-    with_vault_result(|vault| vault.generate_recurring_instances())
+pub fn detect_task_format() -> Result<crate::taskformat::DetectionResult, String> {
+    with_vault(|vault| {
+        let lines = vault.collect_task_lines();
+        crate::taskformat::detect_format(lines.iter().map(|s| s.as_str()))
+    })
+}
+
+#[tauri::command]
+pub fn get_recurring_template_count() -> Result<usize, String> {
+    with_vault(|vault| vault.recurring_template_count())
+}
+
+#[tauri::command]
+pub fn migrate_recurrence_dry_run() -> Result<crate::vault::MigrationReport, String> {
+    with_vault_result(|vault| vault.migrate_recurrence(false))
+}
+
+#[tauri::command]
+pub fn migrate_recurrence_apply() -> Result<crate::vault::MigrationReport, String> {
+    with_vault_result(|vault| vault.migrate_recurrence(true))
 }
 
 #[tauri::command]
@@ -514,7 +568,7 @@ pub fn get_folder_paths(app: AppHandle) -> FolderPaths {
 #[tauri::command]
 pub fn set_folder_paths(folder_paths: FolderPaths, app: AppHandle) -> Result<Vec<Task>, String> {
     // Reject path traversal in folder paths
-    if folder_paths.recurring_templates.contains("..") {
+    if folder_paths.projects_pattern.contains("..") || folder_paths.persons_pattern.contains("..") {
         return Err("Folder path must not contain '..'".to_string());
     }
 
@@ -814,4 +868,44 @@ pub fn send_test_notification(app: AppHandle) -> Result<(), String> {
         .body("Notifications are working!")
         .show()
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_temp_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("annado_{}_{}", tag, nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn scaffold_starter_file_writes_inbox_in_empty_dir() {
+        let dir = unique_temp_dir("scaffold_empty");
+
+        assert!(scaffold_starter_file(&dir));
+        let inbox = dir.join("Inbox.md");
+        assert!(inbox.exists());
+        let body = std::fs::read_to_string(&inbox).unwrap();
+        assert!(body.contains("- [ ] Welcome to Annado"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scaffold_starter_file_skips_dir_with_existing_markdown() {
+        let dir = unique_temp_dir("scaffold_existing");
+        std::fs::write(dir.join("Notes.md"), "# existing").unwrap();
+
+        // Existing `.md` → no scaffold, no Inbox.md written.
+        assert!(!scaffold_starter_file(&dir));
+        assert!(!dir.join("Inbox.md").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

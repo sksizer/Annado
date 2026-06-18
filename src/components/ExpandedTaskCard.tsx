@@ -14,10 +14,12 @@ import { ProjectSelector } from './ProjectSelector';
 import { PrioritySelector } from './PrioritySelector';
 import { DurationPicker } from './DurationPicker';
 import { ChecklistItemRow } from './ChecklistItemRow';
-import { MarkdownNotesRenderer } from './MarkdownNotesRenderer';
+import { MarkdownNotesRenderer, InlineMarkdown } from './MarkdownNotesRenderer';
 import { TagEditor } from './TagEditor';
 import { WikilinkSuggestions } from './WikilinkSuggestions';
 import { useWikilinkSuggest, applyWikilink, buildWikilinkKeyHandler } from '../hooks/useWikilinkSuggest';
+import { useWikilinkProps } from '../hooks/useWikilinkProps';
+import { useFocusWhen } from '../hooks/useFocus';
 import { detectDateHint } from '../utils/detectDateHints';
 import { DateHintBanner } from './DateHintBanner';
 
@@ -91,8 +93,11 @@ export function ExpandedTaskCard({ task, isCollapsing, isSoleSelection }: Expand
   const [localDeadline, setLocalDeadline] = useState<string | null>(task.deadline ?? null);
   const [projects, setProjects] = useState(task.projects);
   const [isEditingNotes, setIsEditingNotes] = useState(false);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
   const notesTextareaRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  useFocusWhen(titleInputRef, isEditingTitle);
+  const wikilinkProps = useWikilinkProps({ onPersonClick: setSelectedPerson, onProjectClick: setSelectedProject });
   const [titleCursor, setTitleCursor] = useState(0);
   const [notesCursor, setNotesCursor] = useState(0);
   const [titleWikiHighlight, setTitleWikiHighlight] = useState(-1);
@@ -124,6 +129,7 @@ export function ExpandedTaskCard({ task, isCollapsing, isSoleSelection }: Expand
     setLocalDeadline(task.deadline ?? null);
     setProjects(task.projects);
     setIsEditingNotes(false);
+    setIsEditingTitle(false);
     resetSubtaskAdder();
   }, [task.id, task.title, task.notes, task.when, task.priority, task.deadline, task.projects, resetSubtaskAdder]);
 
@@ -259,31 +265,50 @@ export function ExpandedTaskCard({ task, isCollapsing, isSoleSelection }: Expand
         <div className="flex-1 min-w-0 flex items-center gap-2 relative">
           {getPriorityIndicator()}
           <div className="relative flex-1">
-            <input
-              ref={titleInputRef}
-              type="text"
-              value={title}
-              onChange={(e) => { setTitle(e.target.value); setTitleCursor(e.target.selectionStart ?? 0); setTitleWikiHighlight(-1); }}
-              onClick={(e) => { e.stopPropagation(); setTitleCursor((e.target as HTMLInputElement).selectionStart ?? 0); }}
-              onKeyUp={(e) => setTitleCursor((e.target as HTMLInputElement).selectionStart ?? 0)}
-              onBlur={handleTitleBlur}
-              onKeyDown={buildWikilinkKeyHandler(titleWiki.suggestions, titleWikiHighlight, title, titleCursor, titleInputRef, setTitleWikiHighlight, setTitle, setTitleCursor, handleExpandedKeyDown)}
-              onDoubleClick={(e) => e.stopPropagation()}
-              className="task-input w-full text-[15px] font-normal bg-transparent text-[#1A1A1A] dark:text-[#E8E8E8] focus:outline-none"
-              placeholder="Task title"
-              autoFocus
-            />
-            <WikilinkSuggestions
-              suggestions={titleWiki.suggestions}
-              highlightedIndex={titleWikiHighlight}
-              onSelect={(name) => {
-                const { newValue, newCursorPos } = applyWikilink(title, titleCursor, name);
-                setTitle(newValue);
-                setTitleCursor(newCursorPos);
-                setTitleWikiHighlight(-1);
-                setTimeout(() => { if (titleInputRef.current) { titleInputRef.current.selectionStart = titleInputRef.current.selectionEnd = newCursorPos; titleInputRef.current.focus(); } }, 0);
-              }}
-            />
+            {isEditingTitle ? (
+              <>
+                <input
+                  ref={titleInputRef}
+                  type="text"
+                  value={title}
+                  onChange={(e) => { setTitle(e.target.value); setTitleCursor(e.target.selectionStart ?? 0); setTitleWikiHighlight(-1); }}
+                  onClick={(e) => { e.stopPropagation(); setTitleCursor((e.target as HTMLInputElement).selectionStart ?? 0); }}
+                  onKeyUp={(e) => setTitleCursor((e.target as HTMLInputElement).selectionStart ?? 0)}
+                  onBlur={() => { handleTitleBlur(); setIsEditingTitle(false); setTitleWikiHighlight(-1); }}
+                  onKeyDown={buildWikilinkKeyHandler(titleWiki.suggestions, titleWikiHighlight, title, titleCursor, titleInputRef, setTitleWikiHighlight, setTitle, setTitleCursor, handleExpandedKeyDown)}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  className="task-input w-full text-[15px] font-normal bg-transparent text-[#1A1A1A] dark:text-[#E8E8E8] focus:outline-none"
+                  placeholder="Task title"
+                />
+                <WikilinkSuggestions
+                  suggestions={titleWiki.suggestions}
+                  highlightedIndex={titleWikiHighlight}
+                  onSelect={(name) => {
+                    const { newValue, newCursorPos } = applyWikilink(title, titleCursor, name);
+                    setTitle(newValue);
+                    setTitleCursor(newCursorPos);
+                    setTitleWikiHighlight(-1);
+                    setTimeout(() => { if (titleInputRef.current) { titleInputRef.current.selectionStart = titleInputRef.current.selectionEnd = newCursorPos; titleInputRef.current.focus(); } }, 0);
+                  }}
+                />
+              </>
+            ) : (
+              <div
+                className="cursor-text min-h-[24px]"
+                onClick={(e) => { e.stopPropagation(); setIsEditingTitle(true); }}
+                onDoubleClick={(e) => e.stopPropagation()}
+              >
+                {title ? (
+                  <InlineMarkdown
+                    text={title}
+                    wikilinkProps={wikilinkProps}
+                    className="text-[15px] font-normal text-[#1A1A1A] dark:text-[#E8E8E8]"
+                  />
+                ) : (
+                  <span className="text-[15px] text-[#A0A0A0] dark:text-[#666]">Task title</span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

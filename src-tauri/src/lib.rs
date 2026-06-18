@@ -2,14 +2,18 @@ mod calendar;
 mod commands;
 mod notification_scheduler;
 mod parser;
+mod recurrence;
+mod taskformat;
 mod vault;
 
 use commands::{
-    create_task, get_all_persons, get_all_projects, get_all_tags, get_person_metadata, get_task,
+    create_task, create_vault, get_all_persons, get_all_projects, get_all_tags, get_person_metadata, get_task,
     get_tasks, get_vault_path, rescan_vault, set_vault_path, toggle_task_complete,
-    toggle_checklist_item, rename_checklist_item, delete_checklist_item, update_project_metadata, update_task, get_all_recurring_templates,
-    create_recurring_template, update_recurring_template, delete_recurring_template,
-    generate_recurring_instances, get_folder_paths, set_folder_paths, delete_task,
+    toggle_checklist_item, rename_checklist_item, delete_checklist_item, update_project_metadata, update_task,
+    migrate_recurrence_dry_run, migrate_recurrence_apply, get_recurring_template_count,
+    get_task_format, set_task_format, detect_task_format,
+    get_task_marker, set_task_marker,
+    get_folder_paths, set_folder_paths, delete_task,
     get_excluded_paths, set_excluded_paths, set_annado_exclude_in_file,
     create_project, rename_project, create_person, rename_person,
     get_calendars, get_calendar_events, check_calendar_access, open_calendar_at_date,
@@ -326,6 +330,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             set_vault_path,
+            create_vault,
             get_vault_path,
             get_tasks,
             get_task,
@@ -344,11 +349,14 @@ pub fn run() {
             update_project_metadata,
             get_pending_deep_link,
             register_global_shortcuts,
-            get_all_recurring_templates,
-            create_recurring_template,
-            update_recurring_template,
-            delete_recurring_template,
-            generate_recurring_instances,
+            migrate_recurrence_dry_run,
+            migrate_recurrence_apply,
+            get_recurring_template_count,
+            get_task_format,
+            set_task_format,
+            detect_task_format,
+            get_task_marker,
+            set_task_marker,
             get_folder_paths,
             set_folder_paths,
             get_excluded_paths,

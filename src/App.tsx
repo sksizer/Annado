@@ -12,9 +12,10 @@ import { MoveToProjectModal } from './components/MoveToProjectModal';
 import { QuickFind } from './components/QuickFind';
 import { VaultSelector } from './components/VaultSelector';
 import { RecurringTaskModal } from './components/RecurringTaskModal';
+import { FormatPickerModal } from './components/FormatPickerModal';
 import { ConfirmModal } from './components/ConfirmModal';
 import { ErrorToast } from './components/ErrorToast';
-import { RecurringTemplate } from './types/task';
+import { Task } from './types/task';
 
 // Feature views are loaded on demand — keeps the startup bundle small.
 const WrappedView = lazy(() => import('./features/wrapped/WrappedView').then((m) => ({ default: m.WrappedView })));
@@ -49,20 +50,20 @@ class ErrorBoundary extends React.Component<
 }
 
 function App() {
-  const { vaultPath, currentView } = useTaskStore(useShallow((s) => ({ vaultPath: s.vaultPath, currentView: s.currentView, })));
+  const { vaultPath, vaultPathLoaded, showWelcome, currentView, needsFormatPicker, dismissFormatPicker } = useTaskStore(useShallow((s) => ({ vaultPath: s.vaultPath, vaultPathLoaded: s.vaultPathLoaded, showWelcome: s.showWelcome, currentView: s.currentView, needsFormatPicker: s.needsFormatPicker, dismissFormatPicker: s.dismissFormatPicker, })));
   useTheme();
   useAppEvents();
   const [moveToProjectOpen, setMoveToProjectOpen] = useState(false);
   const [quickFindOpen, setQuickFindOpen] = useState(false);
   const [quickFindInitialQuery, setQuickFindInitialQuery] = useState('');
   const [recurringModalOpen, setRecurringModalOpen] = useState(false);
-  const [editingRecurringTemplate, setEditingRecurringTemplate] = useState<RecurringTemplate | null>(null);
+  const [editingRecurringTask, setEditingRecurringTask] = useState<Task | null>(null);
   const [confirmModal, setConfirmModal] = useState<{ message: string; onConfirm: () => void } | null>(null);
 
   useKeyboardHandler({
     moveToProjectOpen, quickFindOpen, confirmModal,
     setMoveToProjectOpen, setQuickFindOpen, setQuickFindInitialQuery,
-    setRecurringModalOpen, setEditingRecurringTemplate, setConfirmModal,
+    setRecurringModalOpen, setEditingRecurringTask, setConfirmModal,
   });
 
   const handleQuickFindClose = () => {
@@ -74,15 +75,21 @@ function App() {
 
   const handleRecurringModalClose = () => {
     setRecurringModalOpen(false);
-    setEditingRecurringTemplate(null);
+    setEditingRecurringTask(null);
   };
 
-  const handleOpenRecurringModal = (template?: RecurringTemplate) => {
-    setEditingRecurringTemplate(template || null);
+  const handleOpenRecurringModal = (task?: Task) => {
+    setEditingRecurringTask(task || null);
     setRecurringModalOpen(true);
   };
 
-  if (!vaultPath) {
+  // Hold a neutral screen until the initial saved-vault lookup resolves, so we never flash the
+  // welcome screen before knowing whether a vault is saved.
+  if (!vaultPathLoaded) {
+    return <div className="h-screen w-full bg-[#FEFEFE] dark:bg-[#1A1A1A]" />;
+  }
+
+  if (!vaultPath || showWelcome) {
     return (
       <ErrorBoundary>
         <VaultSelector />
@@ -139,7 +146,8 @@ function App() {
         <QuickAdd />
         <MoveToProjectModal isOpen={moveToProjectOpen} onClose={() => setMoveToProjectOpen(false)} />
         <QuickFind isOpen={quickFindOpen} onClose={handleQuickFindClose} initialQuery={quickFindInitialQuery} />
-        <RecurringTaskModal isOpen={recurringModalOpen} onClose={handleRecurringModalClose} editTemplate={editingRecurringTemplate} />
+        <RecurringTaskModal isOpen={recurringModalOpen} onClose={handleRecurringModalClose} editTask={editingRecurringTask} />
+        <FormatPickerModal isOpen={needsFormatPicker} onClose={dismissFormatPicker} firstRun />
         <ConfirmModal
           open={confirmModal !== null}
           message={confirmModal?.message ?? ''}

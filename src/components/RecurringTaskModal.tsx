@@ -2,120 +2,113 @@ import { useState, useEffect, useRef } from 'react';
 import { modalShadow } from '../utils/styles';
 import { useFocusWhen } from '../hooks/useFocus';
 import { useTaskStore } from '../stores/taskStore';
-import { RecurrenceType, IntervalUnit, RecurringTemplate } from '../types/task';
+import { IntervalUnit, RecurrenceMode, Task } from '../types/task';
 import { ProjectSelector } from './ProjectSelector';
 import { PrioritySelector } from './PrioritySelector';
 
 interface RecurringTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
-  editTemplate?: RecurringTemplate | null;
+  editTask?: Task | null;
 }
 
-export function RecurringTaskModal({ isOpen, onClose, editTemplate }: RecurringTaskModalProps) {
-  const { createRecurringTemplate, updateRecurringTemplate, deleteRecurringTemplate } = useTaskStore();
+export function RecurringTaskModal({ isOpen, onClose, editTask }: RecurringTaskModalProps) {
+  const { createTask, updateTask } = useTaskStore();
   const [title, setTitle] = useState('');
   const [notes, setNotes] = useState('');
-  const [recurrenceType, setRecurrenceType] = useState<RecurrenceType>('fixed');
+  const [mode, setMode] = useState<RecurrenceMode>('fixed');
   const [interval, setInterval] = useState(1);
   const [intervalUnit, setIntervalUnit] = useState<IntervalUnit>('days');
-  const [startDate, setStartDate] = useState<string>('');
+  const [whenDate, setWhenDate] = useState<string>('');
   const [project, setProject] = useState<string>('');
   const [priority, setPriority] = useState<number | null>(null);
   const [showNotes, setShowNotes] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const wasOpenRef = useRef(false);
 
   useFocusWhen(inputRef, isOpen);
 
-  // Get today's date in YYYY-MM-DD format
-  const getTodayString = () => {
-    const today = new Date();
-    return today.toISOString().split('T')[0];
-  };
+  const getTodayString = () => new Date().toISOString().split('T')[0];
 
-  // Handle initialization when opening
+  // A rule outside Annado's modeled subset (e.g. "every weekday") is round-tripped
+  // verbatim and not auto-advanced — show it read-only.
+  const rawRule = editTask?.recurrence?.raw ?? null;
+  const whenAsDate = (t: Task): string =>
+    typeof t.when === 'object' && t.when && 'date' in t.when ? t.when.date : '';
+
   useEffect(() => {
     if (isOpen && !wasOpenRef.current) {
       wasOpenRef.current = true;
 
-      if (editTemplate) {
-        setTitle(editTemplate.title);
-        setNotes(editTemplate.notes);
-        setRecurrenceType(editTemplate.recurrenceType);
-        setInterval(editTemplate.interval);
-        setIntervalUnit(editTemplate.intervalUnit);
-        setStartDate(editTemplate.startDate || '');
-        setProject(editTemplate.projects[0] || '');
-        setPriority(editTemplate.priority);
-        setShowNotes(!!editTemplate.notes);
+      if (editTask) {
+        setTitle(editTask.title);
+        setNotes(editTask.notes);
+        setMode(editTask.recurrence?.mode ?? 'fixed');
+        setInterval(editTask.recurrence?.interval ?? 1);
+        setIntervalUnit(editTask.recurrence?.unit ?? 'days');
+        setWhenDate(whenAsDate(editTask) || getTodayString());
+        setProject(editTask.projects[0] || '');
+        setPriority(editTask.priority);
+        setShowNotes(!!editTask.notes);
       } else {
         setTitle('');
         setNotes('');
-        setRecurrenceType('fixed');
+        setMode('fixed');
         setInterval(1);
         setIntervalUnit('days');
-        setStartDate(getTodayString());
+        setWhenDate(getTodayString());
         setProject('');
         setPriority(null);
         setShowNotes(false);
       }
-      setIsDeleting(false);
     } else if (!isOpen) {
       wasOpenRef.current = false;
     }
-  }, [isOpen, editTemplate]);
+  }, [isOpen, editTask]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
 
+    const recurrence = { interval, unit: intervalUnit, mode, raw: rawRule };
+
     try {
-      if (editTemplate) {
-        await updateRecurringTemplate({
-          templateId: editTemplate.templateId,
+      if (editTask) {
+        await updateTask({
+          id: editTask.id,
           title: title.trim(),
-          notes: notes.trim() || undefined,
-          recurrenceType,
-          interval,
-          intervalUnit,
-          startDate: startDate || undefined,
-          project: project || undefined,
+          notes: notes.trim(),
+          when: whenDate ? { date: whenDate } : undefined,
+          projects: project ? [project] : [],
           priority,
+          recurrence,
         });
       } else {
-        await createRecurringTemplate({
+        const created = await createTask({
           title: title.trim(),
-          notes: notes.trim() || undefined,
-          recurrenceType,
-          interval,
-          intervalUnit,
-          startDate: startDate || undefined,
-          project: project || undefined,
+          when: whenDate ? { date: whenDate } : undefined,
+        });
+        await updateTask({
+          id: created.id,
+          notes: notes.trim(),
+          projects: project ? [project] : [],
           priority,
+          recurrence,
         });
       }
-
       onClose();
     } catch (error) {
-      console.error('Failed to save recurring template:', error);
+      console.error('Failed to save recurring task:', error);
     }
   };
 
-  const handleDelete = async () => {
-    if (!editTemplate) return;
-
-    if (!isDeleting) {
-      setIsDeleting(true);
-      return;
-    }
-
+  const handleRemoveRecurrence = async () => {
+    if (!editTask) return;
     try {
-      await deleteRecurringTemplate(editTemplate.templateId);
+      await updateTask({ id: editTask.id, recurrence: null });
       onClose();
     } catch (error) {
-      console.error('Failed to delete recurring template:', error);
+      console.error('Failed to remove recurrence:', error);
     }
   };
 
@@ -141,7 +134,7 @@ export function RecurringTaskModal({ isOpen, onClose, editTemplate }: RecurringT
           {/* Header */}
           <div className="px-5 py-3 border-b border-[#E8E8E8] dark:border-[#3A3A3A] flex items-center justify-between">
             <h2 className="text-[14px] font-semibold text-[#1A1A1A] dark:text-[#E8E8E8]">
-              {editTemplate ? 'Edit Recurring Task' : 'New Recurring Task'}
+              {editTask ? 'Edit Recurring Task' : 'New Recurring Task'}
             </h2>
             <div className="flex items-center gap-2">
               <svg className="w-5 h-5 text-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -184,80 +177,86 @@ export function RecurringTaskModal({ isOpen, onClose, editTemplate }: RecurringT
             />
           </div>
 
-          {/* Start date */}
+          {/* When (next occurrence) date */}
           <div className="px-5 pb-4 flex items-center gap-3">
-            <span className="text-[12px] text-[#888] dark:text-[#666]">Starts on:</span>
+            <span className="text-[12px] text-[#888] dark:text-[#666]">Next on:</span>
             <input
               type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
+              value={whenDate}
+              onChange={(e) => setWhenDate(e.target.value)}
               className="text-[12px] px-2 py-1 rounded border border-[#E8E8E8] dark:border-[#3A3A3A] bg-white dark:bg-[#333] text-[#1A1A1A] dark:text-[#E0E0E0] focus:outline-none focus:border-success"
             />
-            {startDate && startDate > getTodayString() && (
-              <span className="text-[11px] text-[#888] dark:text-[#666]">
-                (first instance will appear on this date)
-              </span>
-            )}
           </div>
 
           {/* Recurrence settings */}
-          <div className="px-5 pb-4 space-y-3">
-            <div className="flex items-center gap-4">
-              {/* Recurrence type toggle */}
-              <div className="flex items-center gap-2">
-                <span className="text-[12px] text-[#888] dark:text-[#666]">Type:</span>
-                <div className="flex rounded-lg border border-[#E8E8E8] dark:border-[#3A3A3A] overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setRecurrenceType('fixed')}
-                    className={`px-3 py-1.5 text-[12px] transition-colors ${
-                      recurrenceType === 'fixed'
-                        ? 'bg-success text-white'
-                        : 'bg-white dark:bg-[#333] text-[#555] dark:text-[#999] hover:bg-[#F5F5F5] dark:hover:bg-[#3A3A3A]'
-                    }`}
-                  >
-                    Fixed
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRecurrenceType('after_completion')}
-                    className={`px-3 py-1.5 text-[12px] transition-colors ${
-                      recurrenceType === 'after_completion'
-                        ? 'bg-success text-white'
-                        : 'bg-white dark:bg-[#333] text-[#555] dark:text-[#999] hover:bg-[#F5F5F5] dark:hover:bg-[#3A3A3A]'
-                    }`}
-                  >
-                    After Completion
-                  </button>
-                </div>
+          {rawRule ? (
+            <div className="px-5 pb-4">
+              <div className="text-[12px] text-[#888] dark:text-[#666]">
+                Rule: <span className="font-mono text-[#1A1A1A] dark:text-[#E0E0E0]">{rawRule}</span>
+              </div>
+              <div className="text-[11px] text-[#A0A0A0] dark:text-[#666] mt-1">
+                Annado preserves this rule but doesn’t auto-advance it (the Obsidian Tasks plugin does).
               </div>
             </div>
+          ) : (
+            <div className="px-5 pb-4 space-y-3">
+              <div className="flex items-center gap-4">
+                {/* Recurrence mode toggle */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[12px] text-[#888] dark:text-[#666]">Type:</span>
+                  <div className="flex rounded-lg border border-[#E8E8E8] dark:border-[#3A3A3A] overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setMode('fixed')}
+                      className={`px-3 py-1.5 text-[12px] transition-colors ${
+                        mode === 'fixed'
+                          ? 'bg-success text-white'
+                          : 'bg-white dark:bg-[#333] text-[#555] dark:text-[#999] hover:bg-[#F5F5F5] dark:hover:bg-[#3A3A3A]'
+                      }`}
+                    >
+                      Fixed
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMode('when_done')}
+                      className={`px-3 py-1.5 text-[12px] transition-colors ${
+                        mode === 'when_done'
+                          ? 'bg-success text-white'
+                          : 'bg-white dark:bg-[#333] text-[#555] dark:text-[#999] hover:bg-[#F5F5F5] dark:hover:bg-[#3A3A3A]'
+                      }`}
+                    >
+                      When Done
+                    </button>
+                  </div>
+                </div>
+              </div>
 
-            <div className="flex items-center gap-3">
-              <span className="text-[12px] text-[#888] dark:text-[#666]">Every</span>
-              <input
-                type="number"
-                min="1"
-                max="365"
-                value={interval}
-                onChange={(e) => setInterval(Math.max(1, parseInt(e.target.value) || 1))}
-                className="w-16 text-[12px] px-2 py-1 rounded border border-[#E8E8E8] dark:border-[#3A3A3A] bg-white dark:bg-[#333] text-[#1A1A1A] dark:text-[#E0E0E0] focus:outline-none text-center"
-              />
-              <select
-                value={intervalUnit}
-                onChange={(e) => setIntervalUnit(e.target.value as IntervalUnit)}
-                className="task-input text-[12px] px-2 py-1 rounded border border-[#E8E8E8] dark:border-[#3A3A3A] bg-white dark:bg-[#333] text-[#1A1A1A] dark:text-[#E0E0E0] focus:outline-none cursor-pointer"
-              >
-                <option value="days">{interval === 1 ? 'day' : 'days'}</option>
-                <option value="weeks">{interval === 1 ? 'week' : 'weeks'}</option>
-                <option value="months">{interval === 1 ? 'month' : 'months'}</option>
-                <option value="years">{interval === 1 ? 'year' : 'years'}</option>
-              </select>
-              <span className="text-[12px] text-[#888] dark:text-[#666]">
-                {recurrenceType === 'fixed' ? 'on schedule' : 'after completion'}
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-[12px] text-[#888] dark:text-[#666]">Every</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="365"
+                  value={interval}
+                  onChange={(e) => setInterval(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-16 text-[12px] px-2 py-1 rounded border border-[#E8E8E8] dark:border-[#3A3A3A] bg-white dark:bg-[#333] text-[#1A1A1A] dark:text-[#E0E0E0] focus:outline-none text-center"
+                />
+                <select
+                  value={intervalUnit}
+                  onChange={(e) => setIntervalUnit(e.target.value as IntervalUnit)}
+                  className="task-input text-[12px] px-2 py-1 rounded border border-[#E8E8E8] dark:border-[#3A3A3A] bg-white dark:bg-[#333] text-[#1A1A1A] dark:text-[#E0E0E0] focus:outline-none cursor-pointer"
+                >
+                  <option value="days">{interval === 1 ? 'day' : 'days'}</option>
+                  <option value="weeks">{interval === 1 ? 'week' : 'weeks'}</option>
+                  <option value="months">{interval === 1 ? 'month' : 'months'}</option>
+                  <option value="years">{interval === 1 ? 'year' : 'years'}</option>
+                </select>
+                <span className="text-[12px] text-[#888] dark:text-[#666]">
+                  {mode === 'fixed' ? 'on schedule' : 'after completion'}
+                </span>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Bottom toolbar */}
           <div className="flex items-center justify-between px-5 py-3 bg-[#FAFAFA] dark:bg-[#252525] rounded-b-xl">
@@ -271,17 +270,13 @@ export function RecurringTaskModal({ isOpen, onClose, editTemplate }: RecurringT
 
             {/* Action buttons */}
             <div className="flex items-center gap-2">
-              {editTemplate && (
+              {editTask && (
                 <button
                   type="button"
-                  onClick={handleDelete}
-                  className={`px-3 py-1.5 text-[12px] rounded transition-colors ${
-                    isDeleting
-                      ? 'bg-danger text-white'
-                      : 'text-danger hover:bg-[#FFEBEE] dark:hover:bg-[#4A2020]'
-                  }`}
+                  onClick={handleRemoveRecurrence}
+                  className="px-3 py-1.5 text-[12px] rounded transition-colors text-danger hover:bg-[#FFEBEE] dark:hover:bg-[#4A2020]"
                 >
-                  {isDeleting ? 'Confirm Delete' : 'Delete'}
+                  Remove recurrence
                 </button>
               )}
               <button
@@ -296,7 +291,7 @@ export function RecurringTaskModal({ isOpen, onClose, editTemplate }: RecurringT
                 disabled={!title.trim()}
                 className="px-4 py-1.5 text-[12px] bg-success text-white rounded-lg hover:bg-[#388E3C] disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium"
               >
-                {editTemplate ? 'Save' : 'Create'}
+                {editTask ? 'Save' : 'Create'}
               </button>
             </div>
           </div>

@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useTaskStore } from '../stores/taskStore';
 import { matchesKeybinding } from '../utils/keybindings';
 import { groupTasksByProject } from '../utils/taskGrouping';
-import type { RecurringTemplate, ViewType } from '../types/task';
+import type { Task, ViewType } from '../types/task';
 
 interface KeyboardHandlerOptions {
   moveToProjectOpen: boolean;
@@ -12,7 +12,7 @@ interface KeyboardHandlerOptions {
   setQuickFindOpen: (open: boolean) => void;
   setQuickFindInitialQuery: (query: string) => void;
   setRecurringModalOpen: (open: boolean) => void;
-  setEditingRecurringTemplate: (template: RecurringTemplate | null) => void;
+  setEditingRecurringTask: (task: Task | null) => void;
   setConfirmModal: (modal: { message: string; onConfirm: () => void } | null) => void;
 }
 
@@ -31,7 +31,7 @@ export function useKeyboardHandler(opts: KeyboardHandlerOptions) {
   const {
     moveToProjectOpen, quickFindOpen, confirmModal,
     setMoveToProjectOpen, setQuickFindOpen, setQuickFindInitialQuery,
-    setRecurringModalOpen, setEditingRecurringTemplate, setConfirmModal,
+    setRecurringModalOpen, setEditingRecurringTask, setConfirmModal,
   } = opts;
 
   useEffect(() => {
@@ -78,7 +78,7 @@ export function useKeyboardHandler(opts: KeyboardHandlerOptions) {
       // Cmd+Shift+R to open recurring task modal
       if (e.metaKey && e.shiftKey && e.key === 'r') {
         e.preventDefault();
-        setEditingRecurringTemplate(null);
+        setEditingRecurringTask(null);
         setRecurringModalOpen(true);
         return;
       }

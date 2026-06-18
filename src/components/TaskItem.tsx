@@ -4,7 +4,7 @@ import { Task, getWhenType } from '../types/task';
 import { useTaskStore } from '../stores/taskStore';
 import { usePanelState, usePanelTaskState } from '../hooks/usePanelState';
 import { useWikilinkNames } from '../contexts/WikilinkNamesContext';
-import { PRIORITY_CONFIG } from '../utils/projectColors';
+import { PRIORITY_CONFIG, resolveTagColor } from '../utils/projectColors';
 import { formatWhenDisplay, formatDeadlineCountdown, getDeadlineUrgency, formatDateForDisplay, getToday } from '../utils/dates';
 import { InlineMarkdown, WikilinkProps } from './MarkdownNotesRenderer';
 import { ExpandedTaskCard } from './ExpandedTaskCard';
@@ -221,8 +221,8 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
               </svg>
             )}
             {!task.completed && task.tags.map((tag) => {
-              // Subtle tint when the tag has a custom color; neutral gray otherwise
-              const customColor = tagColors[tag];
+              // Subtle tint when the tag (or an ancestor) has a custom color; neutral gray otherwise
+              const customColor = resolveTagColor(tag, tagColors);
               return (
                 <button
                   key={tag}
@@ -255,7 +255,7 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
 
         {/* Right side indicators */}
         <div className="flex items-center gap-2 flex-shrink-0">
-          {task.recurringTemplateId && !task.completed && (
+          {task.recurrence && !task.completed && (
             <svg className="w-3 h-3 text-success flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" strokeLinecap="round" strokeLinejoin="round" />
             </svg>

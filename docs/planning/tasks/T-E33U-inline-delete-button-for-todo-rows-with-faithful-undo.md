@@ -2,7 +2,7 @@
 type: task
 schema_version: '5'
 id: T-E33U
-status: planning/draft
+status: open/ready
 created: '2026-06-15'
 related: []
 tags: []

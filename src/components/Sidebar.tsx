@@ -1,19 +1,6 @@
 import { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import {
-  DndContext,
-  DragEndEvent,
-  closestCenter,
-  PointerSensor,
-  useSensor,
-  useSensors,
-} from '@dnd-kit/core';
-import {
-  SortableContext,
-  verticalListSortingStrategy,
-  useSortable,
-} from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import { SortableList, SortableItem } from './Sortable';
 import { useTaskStore } from '../stores/taskStore';
 import { ViewType, getWhenType, ProjectInfo, PersonInfo, SmartList } from '../types/task';
 import { ContextMenu } from './ContextMenu';
@@ -25,6 +12,7 @@ import { CreateProjectModal } from './CreateProjectModal';
 import { CreatePersonModal } from './CreatePersonModal';
 import { getProjectColor, getTagColor, PROJECT_COLORS } from '../utils/projectColors';
 import { sameTag } from '../utils/tags';
+import { buildTagTree, type TagNode } from '../utils/tagTree';
 import { getViewIcon, PersonIcon } from '../utils/viewIcons';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { isDateTodayOrEarlier, isDateUpcoming } from '../utils/dates';
@@ -206,43 +194,15 @@ function PersonContextMenu({ person, x, y, onRename, onClose }: {
 }
 
 // Sortable wrapper for project items
-function SortableProjectItem({
-  project,
-  children,
-}: {
-  project: ProjectInfo;
-  children: React.ReactNode;
-}) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: project.name });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-  };
-
-  return (
-    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      {children}
-    </div>
-  );
-}
-
 export function Sidebar() {
-  const { currentView, setCurrentView, tasks, selectedProject, setSelectedProject, availableProjects, selectedPerson, setSelectedPerson, availablePeople, recurringTemplates, selectedTag, setSelectedTag, availableTags, sidebarWidth, setSidebarWidth, expandedFolders, toggleFolder, projectColors, setProjectColor, tagColors, setTagColor, projectOrder, reorderProjects, sidebarCounts, showProjectCounts, smartLists, selectedSmartListId, deleteSmartList, setSelectedSmartList, renameProject, renamePerson } = useTaskStore(useShallow((s) => ({ currentView: s.currentView, setCurrentView: s.setCurrentView, tasks: s.tasks, selectedProject: s.selectedProject, setSelectedProject: s.setSelectedProject, availableProjects: s.availableProjects, selectedPerson: s.selectedPerson, setSelectedPerson: s.setSelectedPerson, availablePeople: s.availablePeople, recurringTemplates: s.recurringTemplates, selectedTag: s.selectedTag, setSelectedTag: s.setSelectedTag, availableTags: s.availableTags, sidebarWidth: s.sidebarWidth, setSidebarWidth: s.setSidebarWidth, expandedFolders: s.expandedFolders, toggleFolder: s.toggleFolder, projectColors: s.projectColors, setProjectColor: s.setProjectColor, tagColors: s.tagColors, setTagColor: s.setTagColor, projectOrder: s.projectOrder, reorderProjects: s.reorderProjects, sidebarCounts: s.sidebarCounts, showProjectCounts: s.showProjectCounts, smartLists: s.smartLists, selectedSmartListId: s.selectedSmartListId, deleteSmartList: s.deleteSmartList, setSelectedSmartList: s.setSelectedSmartList, renameProject: s.renameProject, renamePerson: s.renamePerson, })));
+  const { currentView, setCurrentView, tasks, selectedProject, setSelectedProject, availableProjects, selectedPerson, setSelectedPerson, availablePeople, selectedTag, setSelectedTag, availableTags, sidebarWidth, setSidebarWidth, expandedFolders, toggleFolder, projectColors, setProjectColor, tagColors, setTagColor, projectOrder, reorderProjects, sidebarCounts, showProjectCounts, smartLists, selectedSmartListId, deleteSmartList, setSelectedSmartList, renameProject, renamePerson } = useTaskStore(useShallow((s) => ({ currentView: s.currentView, setCurrentView: s.setCurrentView, tasks: s.tasks, selectedProject: s.selectedProject, setSelectedProject: s.setSelectedProject, availableProjects: s.availableProjects, selectedPerson: s.selectedPerson, setSelectedPerson: s.setSelectedPerson, availablePeople: s.availablePeople, selectedTag: s.selectedTag, setSelectedTag: s.setSelectedTag, availableTags: s.availableTags, sidebarWidth: s.sidebarWidth, setSidebarWidth: s.setSidebarWidth, expandedFolders: s.expandedFolders, toggleFolder: s.toggleFolder, projectColors: s.projectColors, setProjectColor: s.setProjectColor, tagColors: s.tagColors, setTagColor: s.setTagColor, projectOrder: s.projectOrder, reorderProjects: s.reorderProjects, sidebarCounts: s.sidebarCounts, showProjectCounts: s.showProjectCounts, smartLists: s.smartLists, selectedSmartListId: s.selectedSmartListId, deleteSmartList: s.deleteSmartList, setSelectedSmartList: s.setSelectedSmartList, renameProject: s.renameProject, renamePerson: s.renamePerson, })));
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [colorPickerProject, setColorPickerProject] = useState<string | null>(null);
   const [colorPickerTag, setColorPickerTag] = useState<string | null>(null);
   const [isResizing, setIsResizing] = useState(false);
   const [isPeopleExpanded, setIsPeopleExpanded] = useState(false);
   const [isTagsExpanded, setIsTagsExpanded] = useState(false);
+  const [expandedTagNodes, setExpandedTagNodes] = useState<Set<string>>(new Set());
   const [isSmartListsExpanded, setIsSmartListsExpanded] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; listId: string } | null>(null);
   const [smartListModalOpen, setSmartListModalOpen] = useState(false);
@@ -267,23 +227,6 @@ export function Sidebar() {
     const trimmed = newName.trim();
     if (trimmed && trimmed !== oldName) renamePerson(oldName, trimmed);
     setRenamingPerson(null);
-  };
-
-  // Drag and drop sensors for project reordering
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8,
-      },
-    })
-  );
-
-  // Handle project drag end
-  const handleProjectDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
-    if (over && active.id !== over.id) {
-      reorderProjects(active.id as string, over.id as string);
-    }
   };
 
   // Handle resize
@@ -372,7 +315,7 @@ export function Sidebar() {
 
   const getCount = (view: ViewType): number => {
     if (view === 'recurring') {
-      return recurringTemplates.length;
+      return tasks.filter((t) => t.recurrence && !t.completed).length;
     }
     if (view === 'wrapped' || view === 'agenda') {
       return 0;
@@ -442,6 +385,72 @@ export function Sidebar() {
   const handleTagClick = (tag: string) => {
     setCurrentView('inbox');
     setSelectedTag(tag);
+  };
+
+  // Nested-tag hierarchy for the Tags section (Obsidian-style parent/child).
+  const tagTree = useMemo(() => buildTagTree(availableTags, tasks), [availableTags, tasks]);
+  const toggleTagNode = (key: string) => {
+    setExpandedTagNodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
+  const renderTagNode = (node: TagNode, depth: number): React.ReactNode => {
+    const isActive = selectedTag != null && sameTag(selectedTag, node.name);
+    const tagColor = getTagColor(node.name, tagColors);
+    const hasChildren = node.children.length > 0;
+    const key = node.name.toLowerCase();
+    const isOpen = expandedTagNodes.has(key);
+    return (
+      <li key={node.name} className="relative">
+        <div className={`${rowClass(isActive)} justify-between`} style={{ paddingLeft: `${12 + depth * 16}px` }}>
+          <span className="flex items-center gap-1.5 min-w-0 flex-1">
+            {hasChildren ? (
+              <button
+                onClick={(e) => { e.stopPropagation(); toggleTagNode(key); }}
+                className="flex-shrink-0 text-[#8A8A8A] dark:text-[#666] hover:opacity-80"
+                aria-label={isOpen ? 'Collapse' : 'Expand'}
+              >
+                {chevronIcon(isOpen)}
+              </button>
+            ) : (
+              <span className="w-3.5 flex-shrink-0" />
+            )}
+            <button onClick={() => handleTagClick(node.name)} className="flex items-center gap-2.5 min-w-0 flex-1 text-left">
+              <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke={isActive ? "currentColor" : tagColor} strokeWidth="1.5"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setColorPickerTag(colorPickerTag === node.name ? null : node.name);
+                }}
+              >
+                <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z" strokeLinecap="round" strokeLinejoin="round" />
+                <circle cx="7" cy="7" r="1.5" fill={isActive ? "currentColor" : tagColor} stroke="none" />
+              </svg>
+              <span className="truncate">#{node.label}</span>
+            </button>
+          </span>
+          {node.count > 0 && (
+            <span className="text-[12px] text-[#8A8A8A] dark:text-[#888] font-normal flex-shrink-0 ml-2">
+              {node.count}
+            </span>
+          )}
+        </div>
+        {colorPickerTag === node.name && (
+          <ColorPicker
+            currentColor={tagColor}
+            onSelect={(newColor) => setTagColor(node.name, newColor)}
+            onClose={() => setColorPickerTag(null)}
+          />
+        )}
+        {hasChildren && isOpen && (
+          <ul className="space-y-0.5">
+            {node.children.map((child) => renderTagNode(child, depth + 1))}
+          </ul>
+        )}
+      </li>
+    );
   };
 
   const handleProjectClick = (project: string) => {
@@ -674,43 +683,7 @@ export function Sidebar() {
               </button>
               {isTagsExpanded && (
                 <ul className="space-y-0.5">
-                  {availableTags.map((tag) => {
-                    const isActive = selectedTag != null && sameTag(selectedTag, tag.name);
-                    const tagColor = getTagColor(tag.name, tagColors);
-                    return (
-                      <li key={tag.name} className="relative">
-                        <button
-                          onClick={() => handleTagClick(tag.name)}
-                          className={`${rowClass(isActive)} justify-between`}
-                        >
-                          <span className="flex items-center gap-3 min-w-0 flex-1">
-                            <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke={isActive ? "currentColor" : tagColor} strokeWidth="1.5"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setColorPickerTag(colorPickerTag === tag.name ? null : tag.name);
-                              }}
-                            >
-                              <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z" strokeLinecap="round" strokeLinejoin="round" />
-                              <circle cx="7" cy="7" r="1.5" fill={isActive ? "currentColor" : tagColor} stroke="none" />
-                            </svg>
-                            <span className="truncate">#{tag.name}</span>
-                          </span>
-                          {tag.count > 0 && (
-                            <span className="text-[12px] text-[#8A8A8A] dark:text-[#888] font-normal flex-shrink-0 ml-2">
-                              {tag.count}
-                            </span>
-                          )}
-                        </button>
-                        {colorPickerTag === tag.name && (
-                          <ColorPicker
-                            currentColor={tagColor}
-                            onSelect={(newColor) => setTagColor(tag.name, newColor)}
-                            onClose={() => setColorPickerTag(null)}
-                          />
-                        )}
-                      </li>
-                    );
-                  })}
+                  {tagTree.map((node) => renderTagNode(node, 0))}
                 </ul>
               )}
             </>
@@ -778,24 +751,20 @@ export function Sidebar() {
           </button>
         </div>
         {projectHierarchy.length > 0 && (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleProjectDragEnd}
+          <SortableList
+            ids={projectHierarchy.map(h => h.project.name)}
+            onReorder={(from, to) => reorderProjects(from, to)}
           >
-            <SortableContext
-              items={projectHierarchy.map(h => h.project.name)}
-              strategy={verticalListSortingStrategy}
-            >
-              <ul className="space-y-0.5">
-                {projectHierarchy.map((item) => (
-                  <SortableProjectItem key={item.project.path} project={item.project}>
-                    {renderProjectTree(item)}
-                  </SortableProjectItem>
-                ))}
-              </ul>
-            </SortableContext>
-          </DndContext>
+            <ul className="space-y-0.5">
+              {projectHierarchy.map((item) => (
+                <SortableItem key={item.project.path} id={item.project.name}>
+                  {({ handleProps }) => (
+                    <div {...handleProps}>{renderProjectTree(item)}</div>
+                  )}
+                </SortableItem>
+              ))}
+            </ul>
+          </SortableList>
         )}
       </nav>
 

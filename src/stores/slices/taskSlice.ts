@@ -7,7 +7,7 @@ import { filterTasks, filterTasksForSmartList, withCompletionLinger } from '../f
 import {
   Task, TaskUpdatePayload, CreateTaskPayload, ViewType,
   ProjectInfo, PersonInfo, PersonMetadata, UpdateProjectMetadataPayload,
-  RecurringTemplate, CreateRecurringTemplatePayload, UpdateRecurringTemplatePayload, TagInfo,
+  MigrationReport, TagInfo,
 } from '../../types/task';
 import { formatDateForStorage, getToday } from '../../utils/dates';
 
@@ -35,7 +35,6 @@ export interface TaskSlice {
   availableProjects: ProjectInfo[];
   availablePeople: PersonInfo[];
   availableTags: TagInfo[];
-  recurringTemplates: RecurringTemplate[];
 
   fetchTasks: () => Promise<void>;
   fetchProjects: () => Promise<void>;
@@ -68,11 +67,8 @@ export interface TaskSlice {
   renameProject: (oldName: string, newName: string) => Promise<void>;
   createPerson: (name: string, meta: { organisation?: string; relationship?: string; languages?: string[]; projects?: string[] }) => Promise<void>;
   renamePerson: (oldName: string, newName: string) => Promise<void>;
-  fetchRecurringTemplates: () => Promise<void>;
-  createRecurringTemplate: (payload: CreateRecurringTemplatePayload) => Promise<RecurringTemplate>;
-  updateRecurringTemplate: (payload: UpdateRecurringTemplatePayload) => Promise<RecurringTemplate>;
-  deleteRecurringTemplate: (templateId: string) => Promise<void>;
-  generateRecurringInstances: () => Promise<void>;
+  migrateRecurrenceDryRun: () => Promise<MigrationReport>;
+  migrateRecurrenceApply: () => Promise<MigrationReport>;
   getFilteredTasks: () => Task[];
   getSelectedTask: () => Task | undefined;
 }
@@ -153,7 +149,6 @@ export const createTaskSlice: SliceCreator<TaskSlice> = (set, get) => {
   availableProjects: [],
   availablePeople: [],
   availableTags: [],
-  recurringTemplates: [],
 
   fetchTasks: async () => {
     set({ isLoading: true, error: null });
@@ -508,64 +503,17 @@ export const createTaskSlice: SliceCreator<TaskSlice> = (set, get) => {
     await get().fetchPeople();
   },
 
-  fetchRecurringTemplates: async () => {
-    const v = _vaultVersion;
-    try {
-      const templates = await invoke<RecurringTemplate[]>('get_all_recurring_templates');
-      if (_vaultVersion !== v) return;
-      set({ recurringTemplates: templates });
-    } catch (error) {
-      if (_vaultVersion !== v) return;
-      set({ error: String(error) });
-    }
+  migrateRecurrenceDryRun: async () => {
+    return await invoke<MigrationReport>('migrate_recurrence_dry_run');
   },
 
-  createRecurringTemplate: async (payload) => {
-    try {
-      const template = await invoke<RecurringTemplate>('create_recurring_template', { payload });
-      set((state) => ({ recurringTemplates: [...state.recurringTemplates, template] }));
-      const tasks = await invoke<Task[]>('get_tasks');
-      set({ tasks });
-      return template;
-    } catch (error) {
-      storeError(set, error);
-    }
-  },
-
-  updateRecurringTemplate: async (payload) => {
-    try {
-      const template = await invoke<RecurringTemplate>('update_recurring_template', { payload });
-      set((state) => ({
-        recurringTemplates: state.recurringTemplates.map((t: RecurringTemplate) =>
-          t.templateId === template.templateId ? template : t
-        ),
-      }));
-      return template;
-    } catch (error) {
-      storeError(set, error);
-    }
-  },
-
-  deleteRecurringTemplate: async (templateId) => {
-    try {
-      await invoke('delete_recurring_template', { templateId });
-      set((state) => ({
-        recurringTemplates: state.recurringTemplates.filter((t: RecurringTemplate) => t.templateId !== templateId),
-      }));
-    } catch (error) {
-      storeError(set, error);
-    }
-  },
-
-  generateRecurringInstances: async () => {
-    try {
-      await invoke<Task[]>('generate_recurring_instances');
-      get().fetchRecurringTemplates();
-      const tasks = await invoke<Task[]>('get_tasks');
-      set({ tasks });
-    } catch (error) {
-      set({ error: String(error) });
-    }
+  migrateRecurrenceApply: async () => {
+    const report = await invoke<MigrationReport>('migrate_recurrence_apply');
+    const tasks = await invoke<Task[]>('get_tasks');
+    set({ tasks });
+    // Templates were deleted by the migration → refresh the count so the Legacy section hides.
+    get().fetchRecurringTemplateCount();
+    return report;
   },
 
   getFilteredTasks: () => {

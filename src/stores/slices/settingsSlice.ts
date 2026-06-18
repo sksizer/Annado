@@ -1,14 +1,14 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { SliceCreator } from './types';
+import type { SliceCreator, RootState } from './types';
 import { persist, storeError } from '../storeUtils';
 import { KEYBINDING_DEFAULTS } from '../../utils/keybindings';
-import type { FolderPaths, EditorType, Task, SmartList } from '../../types/task';
+import { normalizeTagInput } from '../../utils/tags';
+import type { FolderPaths, EditorType, Task, SmartList, TaskFormat, TaskFormatDetection } from '../../types/task';
 
 export type ThemePreference = 'light' | 'dark' | 'system';
 
 
 const DEFAULT_FOLDER_PATHS: FolderPaths = {
-  recurringTemplates: '12. System/recurring-tasks',
   projectsPattern: 'Projects',
   areasPattern: 'Areas',
   personsPattern: 'Persons',
@@ -51,6 +51,63 @@ const persisted = loadPersistedSettings();
 // Incremented on every vault switch so in-flight fetches from the old vault self-abort
 export let _vaultVersion = 0;
 
+/**
+ * Run a vault-scoped read and apply it, ignoring the result if the vault changed while the
+ * request was in flight (avoids writing stale data after the user switched vaults). On error,
+ * sets `error` — unless the vault changed, in which case it's silently dropped. `set` is
+ * passed in, mirroring `storeError`.
+ */
+async function guardedFetch<T>(
+  set: (partial: never) => void,
+  invokeFn: () => Promise<T>,
+  apply: (value: T) => void,
+): Promise<void> {
+  const v = _vaultVersion;
+  try {
+    const result = await invokeFn();
+    if (_vaultVersion !== v) return;
+    apply(result);
+  } catch (error) {
+    if (_vaultVersion !== v) return;
+    (set as (partial: Record<string, unknown>) => void)({ error: String(error) });
+  }
+}
+
+/**
+ * Shared loader for opening (`set_vault_path`) and creating (`create_vault`) a vault. Bumps the
+ * vault version so any in-flight fetch from the previous vault self-aborts, invokes the chosen
+ * command, then populates tasks and refetches all vault-scoped data. Clears `showWelcome` so the
+ * welcome screen closes once a vault is loaded.
+ */
+async function loadVault(
+  set: (partial: Partial<RootState>) => void,
+  get: () => RootState,
+  command: 'set_vault_path' | 'create_vault',
+  path: string,
+): Promise<void> {
+  _vaultVersion++;
+  set({ isLoading: true, error: null });
+  try {
+    const tasks = await invoke<Task[]>(command, { path });
+    const storedLists = localStorage.getItem(`smartLists:${path}`);
+    const smartLists: SmartList[] = storedLists ? JSON.parse(storedLists) : [];
+    set({ tasks, vaultPath: path, isLoading: false, smartLists, selectedSmartListId: null, showWelcome: false });
+    // Fire and forget — each fetch guards against stale vault via _vaultVersion
+    get().fetchProjects();
+    get().fetchPeople();
+    get().fetchTags();
+    get().fetchFolderPaths();
+    get().fetchExcludedPaths();
+    get().fetchIsObsidianVault();
+    get().fetchEditorConfig();
+    get().fetchTaskFormat();
+    get().fetchTaskMarker();
+    get().fetchRecurringTemplateCount();
+  } catch (error) {
+    storeError(set, error, { isLoading: false });
+  }
+}
+
 export interface SettingsSlice {
   vaultPath: string | null;
   isLoading: boolean;
@@ -58,6 +115,10 @@ export interface SettingsSlice {
   isObsidianVault: boolean;
   editorType: EditorType;
   editorCustomCommand: string;
+  taskFormat: string; // '' = unset (show first-run picker)
+  needsFormatPicker: boolean; // true once we've loaded an unset task_format → open first-run picker
+  taskMarkerTag: string; // '' = import every checkbox; e.g. 'task' = only #task checkboxes
+  recurringTemplateCount: number; // legacy templates detected in the vault (gates the migration UI)
   folderPaths: FolderPaths;
   excludedPaths: string[];
   theme: ThemePreference;
@@ -65,8 +126,16 @@ export interface SettingsSlice {
   accentColor: string | null;
   keybindings: Record<string, string>;
   confirmDelete: boolean;
+  /** Transient (not persisted): force the welcome screen even when a vault is set, so it can be
+   *  revisited via Settings → Switch vault. */
+  showWelcome: boolean;
+  /** False until the initial saved-vault lookup completes. Gates the UI so we don't flash the
+   *  welcome screen before we know whether a vault is saved. */
+  vaultPathLoaded: boolean;
 
   setVaultPath: (path: string) => Promise<void>;
+  createVault: (path: string) => Promise<void>;
+  setShowWelcome: (value: boolean) => void;
   loadSavedVaultPath: () => Promise<void>;
   fetchFolderPaths: () => Promise<void>;
   setFolderPaths: (folderPaths: FolderPaths) => Promise<void>;
@@ -74,6 +143,13 @@ export interface SettingsSlice {
   setIsObsidianVault: (value: boolean) => Promise<void>;
   fetchEditorConfig: () => Promise<void>;
   setEditorConfig: (editorType: EditorType, customCommand: string) => Promise<void>;
+  fetchTaskFormat: () => Promise<void>;
+  setTaskFormat: (taskFormat: TaskFormat) => Promise<void>;
+  detectTaskFormat: () => Promise<TaskFormatDetection>;
+  dismissFormatPicker: () => void;
+  fetchTaskMarker: () => Promise<void>;
+  setTaskMarker: (marker: string) => Promise<void>;
+  fetchRecurringTemplateCount: () => Promise<void>;
   fetchExcludedPaths: () => Promise<void>;
   addExcludedPath: (path: string) => Promise<void>;
   removeExcludedPath: (path: string) => Promise<void>;
@@ -91,34 +167,22 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
   isObsidianVault: false,
   editorType: 'system' as EditorType,
   editorCustomCommand: '',
+  taskFormat: '',
+  needsFormatPicker: false,
+  taskMarkerTag: '',
+  recurringTemplateCount: 0,
   folderPaths: DEFAULT_FOLDER_PATHS,
   excludedPaths: [],
   theme: persisted.theme,
   accentColor: persisted.accentColor,
   keybindings: persisted.keybindings,
   confirmDelete: persisted.confirmDelete,
+  showWelcome: false,
+  vaultPathLoaded: false,
 
-  setVaultPath: async (path: string) => {
-    _vaultVersion++;
-    set({ isLoading: true, error: null });
-    try {
-      const tasks = await invoke<Task[]>('set_vault_path', { path });
-      const storedLists = localStorage.getItem(`smartLists:${path}`);
-      const smartLists: SmartList[] = storedLists ? JSON.parse(storedLists) : [];
-      set({ tasks, vaultPath: path, isLoading: false, smartLists, selectedSmartListId: null });
-      // Fire and forget — each fetch guards against stale vault via _vaultVersion
-      get().fetchProjects();
-      get().fetchPeople();
-      get().fetchTags();
-      get().fetchRecurringTemplates();
-      get().fetchFolderPaths();
-      get().fetchExcludedPaths();
-      get().fetchIsObsidianVault();
-      get().fetchEditorConfig();
-    } catch (error) {
-      storeError(set, error, { isLoading: false });
-    }
-  },
+  setVaultPath: (path: string) => loadVault(set, get, 'set_vault_path', path),
+  createVault: (path: string) => loadVault(set, get, 'create_vault', path),
+  setShowWelcome: (value: boolean) => set({ showWelcome: value }),
 
   loadSavedVaultPath: async () => {
     try {
@@ -126,20 +190,15 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
       if (path) await get().setVaultPath(path);
     } catch (error) {
       console.error('Failed to load saved vault path:', error);
+    } finally {
+      // Mark the initial lookup done so the UI can stop holding the splash and decide between
+      // the main app (vault found) and the welcome screen (genuine first run).
+      set({ vaultPathLoaded: true });
     }
   },
 
-  fetchFolderPaths: async () => {
-    const v = _vaultVersion;
-    try {
-      const folderPaths = await invoke<FolderPaths>('get_folder_paths');
-      if (_vaultVersion !== v) return;
-      set({ folderPaths });
-    } catch (error) {
-      if (_vaultVersion !== v) return;
-      set({ error: String(error) });
-    }
-  },
+  fetchFolderPaths: async () =>
+    guardedFetch(set, () => invoke<FolderPaths>('get_folder_paths'), (folderPaths) => set({ folderPaths })),
 
   setFolderPaths: async (folderPaths: FolderPaths) => {
     try {
@@ -147,23 +206,13 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
       set({ tasks, folderPaths });
       get().fetchProjects();
       get().fetchPeople();
-      get().fetchRecurringTemplates();
     } catch (error) {
       storeError(set, error);
     }
   },
 
-  fetchIsObsidianVault: async () => {
-    const v = _vaultVersion;
-    try {
-      const isObsidianVault = await invoke<boolean>('get_is_obsidian_vault');
-      if (_vaultVersion !== v) return;
-      set({ isObsidianVault });
-    } catch (error) {
-      if (_vaultVersion !== v) return;
-      set({ error: String(error) });
-    }
-  },
+  fetchIsObsidianVault: async () =>
+    guardedFetch(set, () => invoke<boolean>('get_is_obsidian_vault'), (isObsidianVault) => set({ isObsidianVault })),
 
   setIsObsidianVault: async (value: boolean) => {
     try {
@@ -174,17 +223,12 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
     }
   },
 
-  fetchEditorConfig: async () => {
-    const v = _vaultVersion;
-    try {
-      const config = await invoke<{ editorType: string; editorCustomCommand: string }>('get_editor_config');
-      if (_vaultVersion !== v) return;
-      set({ editorType: config.editorType as EditorType, editorCustomCommand: config.editorCustomCommand });
-    } catch (error) {
-      if (_vaultVersion !== v) return;
-      set({ error: String(error) });
-    }
-  },
+  fetchEditorConfig: async () =>
+    guardedFetch(
+      set,
+      () => invoke<{ editorType: string; editorCustomCommand: string }>('get_editor_config'),
+      (config) => set({ editorType: config.editorType as EditorType, editorCustomCommand: config.editorCustomCommand }),
+    ),
 
   setEditorConfig: async (editorType: EditorType, customCommand: string) => {
     try {
@@ -195,17 +239,56 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
     }
   },
 
-  fetchExcludedPaths: async () => {
-    const v = _vaultVersion;
+  fetchTaskFormat: async () =>
+    guardedFetch(set, () => invoke<string>('get_task_format'), (taskFormat) => set({ taskFormat, needsFormatPicker: taskFormat === '' })),
+
+  setTaskFormat: async (taskFormat: TaskFormat) => {
     try {
-      const excludedPaths = await invoke<string[]>('get_excluded_paths');
-      if (_vaultVersion !== v) return;
-      set({ excludedPaths });
+      await invoke('set_task_format', { taskFormat });
+      set({ taskFormat, needsFormatPicker: false });
     } catch (error) {
-      if (_vaultVersion !== v) return;
-      set({ error: String(error) });
+      storeError(set, error);
     }
   },
+
+  detectTaskFormat: async () => {
+    return await invoke<TaskFormatDetection>('detect_task_format');
+  },
+
+  dismissFormatPicker: () => set({ needsFormatPicker: false }),
+
+  fetchTaskMarker: async () =>
+    guardedFetch(set, () => invoke<string>('get_task_marker'), (taskMarkerTag) => set({ taskMarkerTag })),
+
+  setTaskMarker: async (marker: string) => {
+    try {
+      // Changing the marker rescans (changes which checkboxes import).
+      const tasks = await invoke<Task[]>('set_task_marker', { taskMarker: marker });
+      set({ taskMarkerTag: normalizeTagInput(marker), tasks });
+      // The imported set changed → refresh derived lists. In particular the marker tag
+      // (e.g. #task) is stripped from imported tasks, so the sidebar tag list must be
+      // refetched or it keeps showing a now-empty #task entry.
+      get().fetchTags();
+      get().fetchProjects();
+      get().fetchPeople();
+    } catch (error) {
+      storeError(set, error);
+    }
+  },
+
+  fetchRecurringTemplateCount: async () => {
+    const v = _vaultVersion;
+    try {
+      const count = await invoke<number>('get_recurring_template_count');
+      if (_vaultVersion !== v) return;
+      set({ recurringTemplateCount: count });
+    } catch {
+      // Non-fatal: just leave the count as-is (migration UI stays hidden).
+    }
+  },
+
+  fetchExcludedPaths: async () =>
+    guardedFetch(set, () => invoke<string[]>('get_excluded_paths'), (excludedPaths) => set({ excludedPaths })),
 
   addExcludedPath: async (path: string) => {
     try {

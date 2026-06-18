@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 
 export interface ContextMenuItem {
   label: string;
@@ -33,7 +34,10 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
     };
   }, [onClose]);
 
-  return (
+  // Portal to <body> so the fixed positioning is viewport-relative even when an
+  // ancestor has a CSS transform (e.g. virtualized task rows use translateY, which
+  // would otherwise make `position: fixed` resolve against the row, not the screen).
+  return createPortal(
     <div
       ref={ref}
       className="fixed z-50 bg-white dark:bg-[#2A2A2A] rounded-lg shadow-lg border border-[#E8E8E8] dark:border-[#3A3A3A] py-1 min-w-[140px]"
@@ -55,6 +59,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
           {item.label}
         </button>
       ))}
-    </div>
+    </div>,
+    document.body
   );
 }

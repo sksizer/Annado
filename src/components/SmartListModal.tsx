@@ -148,12 +148,16 @@ function ProjectsDropdown({
   );
 }
 
-// Clean two-column row: label left (fixed width), control right
-function FilterRow({ label, children }: { label: string; children: ReactNode }) {
+// Clean two-column row: label left (fixed width), control right.
+// Optional `hint` renders a muted second line explaining the control's behavior.
+function FilterRow({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return (
-    <div className="flex items-center py-2.5">
-      <span className="w-24 text-[13px] font-medium text-[#3C3C43] dark:text-[#EBEBF5] flex-shrink-0">{label}</span>
-      <div className="flex-1 flex justify-end items-center">{children}</div>
+    <div className="py-2.5">
+      <div className="flex items-center">
+        <span className="w-24 text-[13px] font-medium text-[#3C3C43] dark:text-[#EBEBF5] flex-shrink-0">{label}</span>
+        <div className="flex-1 flex justify-end items-center">{children}</div>
+      </div>
+      {hint && <p className="mt-1 ml-24 text-[11px] leading-snug text-[#8E8E93]">{hint}</p>}
     </div>
   );
 }
@@ -289,7 +293,7 @@ export function SmartListModal({ editList, onClose }: SmartListModalProps) {
             </div>
           </FilterRow>
 
-          <FilterRow label="Priority">
+          <FilterRow label="Priority" hint="Obsidian Tasks’ 5 levels map to 3: highest (🔺) counts as High, lowest (⏬) as Low.">
             <SegmentedControl
               options={[
                 { label: 'Any', value: undefined },
@@ -327,7 +331,7 @@ export function SmartListModal({ editList, onClose }: SmartListModalProps) {
           )}
 
           {availableTags.length > 0 && (
-            <FilterRow label="Tag">
+            <FilterRow label="Tag" hint="The import marker tag (set in Settings) is stripped on import, so it can’t be filtered here.">
               <InlineSelect
                 value={filter.tag ?? ''}
                 onChange={v => setF('tag', v || undefined)}

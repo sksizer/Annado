@@ -1,5 +1,5 @@
 use crate::parser::{self, derive_project_name, derive_project_name_with_pattern, extract_wikilinks, Task, WhenValue, RecurringTemplate, RecurrenceType, IntervalUnit};
-use chrono::{Local, Months, NaiveDate};
+use chrono::{Local, NaiveDate};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,6 @@ fn default_daily_notes_format() -> String { "YYYY/MM-MMMM/YYYY-MM-DD".to_string(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderPaths {
-    pub recurring_templates: String,
     pub projects_pattern: String,
     #[serde(default = "default_areas_pattern")]
     pub areas_pattern: String,
@@ -32,7 +31,6 @@ pub struct FolderPaths {
 impl Default for FolderPaths {
     fn default() -> Self {
         FolderPaths {
-            recurring_templates: "12. System/recurring-tasks".to_string(),
             projects_pattern: "Projects".to_string(),
             areas_pattern: "Areas".to_string(),
             persons_pattern: "Persons".to_string(),
@@ -258,29 +256,65 @@ pub struct Vault {
     pub folder_paths: FolderPaths,
     pub excluded_paths: Vec<String>,
     pub is_obsidian_vault: bool,
+    // Shared so the background file-watcher reads the live value (no restart needed on change).
+    task_format: Arc<RwLock<crate::taskformat::TaskFormat>>,
+    task_marker: Arc<RwLock<String>>, // import marker tag ("" = import every checkbox)
+    recurring_template_count: Arc<RwLock<usize>>, // legacy templates found in the last scan
     tasks: Arc<RwLock<HashMap<String, Task>>>,
     watcher: Option<RecommendedWatcher>,
 }
 
-impl Vault {
-    pub fn new(path: PathBuf) -> Self {
-        let is_obsidian = path.join(".obsidian").is_dir();
-        Vault {
-            path,
-            folder_paths: FolderPaths::default(),
-            excluded_paths: Vec::new(),
-            is_obsidian_vault: is_obsidian,
-            tasks: Arc::new(RwLock::new(HashMap::new())),
-            watcher: None,
-        }
-    }
+/// Report from the one-time recurrence migration (template model -> inline @repeat model).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationReport {
+    pub templates: usize,
+    pub new_tasks: Vec<String>,      // formatted inline recurring task lines that will be created
+    pub instances_deorphaned: usize, // completed instances kept, @recurring marker stripped
+    pub instances_removed: usize,    // uncompleted instances collapsed away
+    pub backup_path: Option<String>,
+}
 
+/// Build a transient inline recurring task from a legacy template (used by the migration).
+/// `file_path`/`line_number` are placeholders; the caller decides where to write it.
+fn build_inline_recurring_task(
+    template: &RecurringTemplate,
+    rec: crate::recurrence::Recurrence,
+    next: NaiveDate,
+) -> Task {
+    Task {
+        id: String::new(),
+        title: template.title.clone(),
+        notes: template.notes.clone(),
+        when: WhenValue::Date(next.format("%Y-%m-%d").to_string()),
+        deadline: None,
+        tags: template.tags.clone(),
+        checklist: Vec::new(),
+        completed: false,
+        completed_date: None,
+        created_date: None,
+        file_path: String::new(),
+        line_number: 0,
+        projects: template.projects.clone(),
+        indent_level: 0,
+        priority: template.priority,
+        persons: Vec::new(),
+        recurrence: Some(rec),
+        duration_minutes: None,
+        scheduled_time: None,
+    }
+}
+
+impl Vault {
     pub fn new_with_folder_paths(path: PathBuf, folder_paths: FolderPaths, is_obsidian_vault: bool) -> Self {
         Vault {
             path,
             folder_paths,
             excluded_paths: Vec::new(),
             is_obsidian_vault,
+            task_format: Arc::new(RwLock::new(crate::taskformat::TaskFormat::Annado)),
+            task_marker: Arc::new(RwLock::new(String::new())),
+            recurring_template_count: Arc::new(RwLock::new(0)),
             tasks: Arc::new(RwLock::new(HashMap::new())),
             watcher: None,
         }
@@ -288,6 +322,57 @@ impl Vault {
 
     pub fn set_folder_paths(&mut self, folder_paths: FolderPaths) {
         self.folder_paths = folder_paths;
+    }
+
+    pub fn set_task_format(&self, task_format: crate::taskformat::TaskFormat) {
+        *self.task_format.write() = task_format;
+    }
+
+    pub fn current_task_format(&self) -> crate::taskformat::TaskFormat {
+        *self.task_format.read()
+    }
+
+    pub fn set_task_marker(&self, task_marker: String) {
+        *self.task_marker.write() = task_marker;
+    }
+
+    pub fn current_task_marker(&self) -> String {
+        self.task_marker.read().clone()
+    }
+
+    /// Non-hidden, non-excluded `.md` files anywhere in the vault. The single place that
+    /// owns the walk + skip rules, so they can't drift between call sites.
+    fn walk_md_files(&self) -> impl Iterator<Item = PathBuf> + '_ {
+        WalkDir::new(&self.path)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .map(|e| e.into_path())
+            .filter(move |p| {
+                p.extension().map_or(false, |x| x == "md")
+                    && !is_hidden_path(p)
+                    && !Self::is_path_excluded(p, &self.path, &self.excluded_paths)
+            })
+    }
+
+    /// Collect raw top-level task lines across the vault (for format detection).
+    pub fn collect_task_lines(&self) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        for path in self.walk_md_files() {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if Self::is_recurring_template(&content) {
+                    continue; // legacy template file — not real tasks
+                }
+                for line in content.lines() {
+                    if let Some(parsed) = parser::parse_task_line(line) {
+                        if parsed.indent < 4 {
+                            lines.push(line.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        lines
     }
 
     pub fn set_is_obsidian_vault(&mut self, value: bool) {
@@ -338,6 +423,26 @@ impl Vault {
         false
     }
 
+    /// Whether a file is a legacy recurring-task template, identified by the trio of
+    /// frontmatter keys the old format always wrote together (robust against a stray
+    /// `template_id:` in an unrelated note). Used to detect + skip templates regardless
+    /// of which folder they live in.
+    pub fn is_recurring_template(content: &str) -> bool {
+        let Some((yaml, _)) = Self::parse_frontmatter(content) else {
+            return false;
+        };
+        if let serde_yml::Value::Mapping(map) = yaml {
+            let has = |k: &str| map.contains_key(&serde_yml::Value::String(k.to_string()));
+            return has("template_id") && has("recurrence_type") && has("interval_unit");
+        }
+        false
+    }
+
+    /// Number of legacy recurring templates found in the last scan (cached; O(1) read).
+    pub fn recurring_template_count(&self) -> usize {
+        *self.recurring_template_count.read()
+    }
+
     /// Check if a file path matches any exclusion entry.
     /// Handles both file paths (`Shopping List.md`) and folder prefixes (`Lists/`).
     pub fn is_path_excluded(file_path: &Path, vault_root: &Path, excluded_paths: &[String]) -> bool {
@@ -374,6 +479,7 @@ impl Vault {
     pub fn scan(&self) -> Vec<Task> {
         let today = Local::now().date_naive();
         let mut all_tasks: Vec<Task> = Vec::new();
+        let mut template_count = 0usize; // legacy recurring templates seen (content-detected)
 
         // Get valid persons and projects for wiki-link resolution
         let persons = self.get_all_persons();
@@ -381,46 +487,31 @@ impl Vault {
         let projects = self.get_all_projects();
         let project_names: std::collections::HashSet<String> = projects.iter().map(|p| p.name.clone()).collect();
 
-        for entry in WalkDir::new(&self.path)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-
-            // Only process .md files
-            if path.extension().map_or(false, |ext| ext == "md") {
-                // Skip hidden files and folders
-                if is_hidden_path(path) {
+        for path in self.walk_md_files() {
+            if let Ok(content) = fs::read_to_string(&path) {
+                // Skip legacy recurring-template files (anywhere) so their body checkbox
+                // isn't imported as a task; count them for the migration UI. Checked
+                // BEFORE annado_exclude — a template is never a task, regardless of any
+                // annado_exclude flag it carries (else such templates go uncounted).
+                if Self::is_recurring_template(&content) {
+                    template_count += 1;
+                    continue;
+                }
+                // Skip files with annado_exclude: true in frontmatter
+                if Self::has_annado_exclude(&content) {
                     continue;
                 }
 
-                // Skip recurring-tasks folder (contains templates, not task instances)
-                let path_str = path.to_string_lossy();
-                if path_str.contains(&self.folder_paths.recurring_templates) {
-                    continue;
-                }
+                let file_path = path.to_string_lossy().to_string();
+                let mut tasks = parser::parse_file_with_marker(&content, &file_path, today, &self.current_task_marker());
 
-                // Skip excluded paths
-                if Self::is_path_excluded(path, &self.path, &self.excluded_paths) {
-                    continue;
-                }
-
-                if let Ok(content) = fs::read_to_string(path) {
-                    // Skip files with annado_exclude: true in frontmatter
-                    if Self::has_annado_exclude(&content) {
-                        continue;
-                    }
-
-                    let file_path = path.to_string_lossy().to_string();
-                    let mut tasks = parser::parse_file(&content, &file_path, today);
-
-                    apply_areas_project(&mut tasks, &self.folder_paths.areas_pattern);
-                    resolve_wikilinks(&mut tasks, &person_names, &project_names);
-                    all_tasks.extend(tasks);
-                }
+                apply_areas_project(&mut tasks, &self.folder_paths.areas_pattern);
+                resolve_wikilinks(&mut tasks, &person_names, &project_names);
+                all_tasks.extend(tasks);
             }
         }
+
+        *self.recurring_template_count.write() = template_count;
 
         // Update internal cache
         {
@@ -463,6 +554,29 @@ impl Vault {
         self.tasks.read().get(id).cloned()
     }
 
+    /// Insert `task`'s formatted line immediately after `after_line` (1-based) in `file_path`.
+    pub fn insert_task_after(
+        &self,
+        file_path: &str,
+        after_line: usize,
+        task: &Task,
+    ) -> Result<(), String> {
+        self.validate_path_in_vault(file_path)?;
+        let content = fs::read_to_string(file_path)
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+        let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+        let today = Local::now().date_naive();
+        let project_names: std::collections::HashSet<String> =
+            self.get_all_projects().iter().map(|p| p.name.clone()).collect();
+        let file_project = derive_project_name(file_path);
+        let new_line = parser::format_task_line_with_marker(task, today, file_project.as_deref(), &project_names, self.current_task_format(), &self.current_task_marker());
+        let idx = after_line.min(lines.len());
+        lines.insert(idx, new_line);
+        fs::write(file_path, lines.join("\n"))
+            .map_err(|e| format!("Failed to write file: {}", e))?;
+        Ok(())
+    }
+
     pub fn update_task(&self, updated_task: Task) -> Result<(), String> {
         let today = Local::now().date_naive();
 
@@ -488,11 +602,13 @@ impl Vault {
 
         let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
         let file_project = derive_project_name(&updated_task.file_path);
-        new_lines[line_index] = parser::format_task_line(
+        new_lines[line_index] = parser::format_task_line_with_marker(
             &updated_task,
             today,
             file_project.as_deref(),
             &project_names,
+            self.current_task_format(),
+            &self.current_task_marker(),
         );
 
         // Handle notes: find and replace existing notes below the task
@@ -787,7 +903,7 @@ impl Vault {
         let new_line_number = line_count + 1;
 
         // Create the task
-        let task = Task {
+        let mut task = Task {
             id: Task::generate_id(&file_path.to_string_lossy(), new_line_number),
             title: title.to_string(),
             notes: String::new(),
@@ -804,18 +920,25 @@ impl Vault {
             indent_level: 0,
             priority: None,
             persons: Vec::new(),
-            recurring_template_id: None,
+            recurrence: None,
             duration_minutes: None,
             scheduled_time: None,
         };
 
-        // Format and append to file
-        let file_project = derive_project_name(&file_path.to_string_lossy());
-        // Get project names for format_task_line
+        // Resolve [[Project]]/[[Person]] wikilinks in the title at creation, the same way
+        // the file-watcher does on re-scan, so a typed [[Existing Project]] is assigned
+        // immediately instead of flickering through the inbox. (An unknown link is left
+        // untouched in the title, where it renders as the grey dashed "create it" chip.)
         let projects = self.get_all_projects();
         let project_names: std::collections::HashSet<String> =
             projects.iter().map(|p| p.name.clone()).collect();
-        let task_line = parser::format_task_line(&task, today, file_project.as_deref(), &project_names);
+        let person_names: std::collections::HashSet<String> =
+            self.get_all_persons().iter().map(|p| p.name.clone()).collect();
+        resolve_wikilinks(std::slice::from_mut(&mut task), &person_names, &project_names);
+
+        // Format and append to file
+        let file_project = derive_project_name(&file_path.to_string_lossy());
+        let task_line = parser::format_task_line_with_marker(&task, today, file_project.as_deref(), &project_names, self.current_task_format(), &self.current_task_marker());
         let new_content = if content.ends_with('\n') || content.is_empty() {
             format!("{}{}\n", content, task_line)
         } else {
@@ -899,8 +1022,10 @@ impl Vault {
         let persons_pattern = self.folder_paths.persons_pattern.clone();
         let projects_pattern = self.folder_paths.projects_pattern.clone();
         let areas_pattern = self.folder_paths.areas_pattern.clone();
-        let recurring_templates = self.folder_paths.recurring_templates.clone();
         let excluded_paths = self.excluded_paths.clone();
+        // Share the live cells so format/marker changes take effect without an app restart.
+        let task_marker = Arc::clone(&self.task_marker);
+        let task_format = Arc::clone(&self.task_format);
 
         // Watcher thread: debounce a burst of events, then re-parse only the
         // changed files and diff them into the cache (no full-vault rescans).
@@ -944,6 +1069,9 @@ impl Vault {
 
                 let today = Local::now().date_naive();
                 let today_str = today.format("%Y-%m-%d").to_string();
+                // Read the current format/marker once per event batch (live, not snapshotted).
+                let task_format = *task_format.read();
+                let task_marker = task_marker.read().clone();
 
                 // Refresh wiki-link name sets only when a project/person/area file changed
                 let names_dirty = needs_full_rescan
@@ -983,15 +1111,14 @@ impl Vault {
 
                     let parsed: Option<Vec<Task>> = if !file_path.exists()
                         || is_hidden_path(file_path)
-                        || file_path_str.contains(&recurring_templates)
                         || Vault::is_path_excluded(file_path, &path, &excluded_paths)
                     {
                         None // deleted, moved away, or excluded: just drop its tasks
                     } else if let Ok(content) = fs::read_to_string(file_path) {
-                        if Vault::has_annado_exclude(&content) {
+                        if Vault::has_annado_exclude(&content) || Vault::is_recurring_template(&content) {
                             None
                         } else {
-                            let mut tasks = parser::parse_file(&content, &file_path_str, today);
+                            let mut tasks = parser::parse_file_with_marker(&content, &file_path_str, today, &task_marker);
                             apply_areas_project(&mut tasks, &areas_pattern);
                             resolve_wikilinks(&mut tasks, &person_names, &project_names);
                             Some(tasks)
@@ -1029,7 +1156,8 @@ impl Vault {
                             append_marker_to_lines(
                                 file_path,
                                 &completed_lines,
-                                &format!("@completed({})", today_str),
+                                &crate::taskformat::encode_completed(&Some(today_str.clone()), task_format)
+                                    .unwrap_or_default(),
                             );
                         }
                     }
@@ -1067,7 +1195,8 @@ impl Vault {
                             append_marker_to_lines(
                                 Path::new(fp),
                                 lines,
-                                &format!("@created({})", today_str),
+                                &crate::taskformat::encode_created(&Some(today_str.clone()), task_format)
+                                    .unwrap_or_default(),
                             );
                         }
                         let mut cache = tasks_ref.write();
@@ -1819,25 +1948,9 @@ impl Vault {
     }
 
     /// Get the path to the recurring tasks folder
-    pub fn get_recurring_folder_path(&self) -> PathBuf {
-        self.path.join(&self.folder_paths.recurring_templates)
-    }
-
-    /// Ensure the recurring tasks folder exists
-    fn ensure_recurring_folder_exists(&self) -> Result<(), String> {
-        let folder = self.get_recurring_folder_path();
-        if !folder.exists() {
-            fs::create_dir_all(&folder)
-                .map_err(|e| format!("Failed to create recurring tasks folder: {}", e))?;
-        }
-        Ok(())
-    }
-
-    /// Parse a recurring template from a file
-    fn parse_recurring_template(path: &Path) -> Option<RecurringTemplate> {
-        let content = fs::read_to_string(path).ok()?;
-
-        let (yaml, body_raw) = Self::parse_frontmatter(&content)?;
+    /// Parse a recurring template from a file's content (file_path is stored on the struct).
+    fn parse_recurring_template(content: &str, file_path: &str) -> Option<RecurringTemplate> {
+        let (yaml, body_raw) = Self::parse_frontmatter(content)?;
         let body = body_raw.trim();
         let map = yaml.as_mapping()?;
 
@@ -1862,6 +1975,8 @@ impl Vault {
             .unwrap_or("days");
         let interval_unit = match interval_unit_str {
             "weeks" => IntervalUnit::Weeks,
+            "months" => IntervalUnit::Months,
+            "years" => IntervalUnit::Years,
             _ => IntervalUnit::Days,
         };
 
@@ -1932,26 +2047,24 @@ impl Vault {
             start_date,
             last_generated,
             last_completed,
-            file_path: path.to_string_lossy().to_string(),
+            file_path: file_path.to_string(),
             projects,
             priority,
             tags,
         })
     }
 
-    /// Get all recurring templates
+    /// Get all legacy recurring templates anywhere in the vault (content-detected, so the
+    /// migration works regardless of which folder they were stored in). Called only during
+    /// the one-time migration, not on load.
     pub fn get_all_recurring_templates(&self) -> Vec<RecurringTemplate> {
-        let folder = self.get_recurring_folder_path();
-        if !folder.exists() {
-            return Vec::new();
-        }
-
         let mut templates = Vec::new();
-        if let Ok(entries) = fs::read_dir(&folder) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                let path = entry.path();
-                if path.extension().map_or(false, |ext| ext == "md") {
-                    if let Some(template) = Self::parse_recurring_template(&path) {
+        for path in self.walk_md_files() {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if Self::is_recurring_template(&content) {
+                    if let Some(template) =
+                        Self::parse_recurring_template(&content, &path.to_string_lossy())
+                    {
                         templates.push(template);
                     }
                 }
@@ -1961,529 +2074,232 @@ impl Vault {
     }
 
     /// Generate a unique template ID
-    fn generate_template_id() -> String {
-        use sha2::{Digest, Sha256};
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let mut hasher = Sha256::new();
-        hasher.update(format!("{}", timestamp));
-        let result = hasher.finalize();
-        hex::encode(&result[..6]) // 12-character hex string
-    }
+    // ---- Recurrence migration: template model -> inline @repeat model ----
 
-    /// Create a new recurring template
-    pub fn create_recurring_template(
-        &self,
-        title: &str,
-        notes: Option<&str>,
-        recurrence_type: RecurrenceType,
-        interval: u32,
-        interval_unit: IntervalUnit,
-        start_date: Option<&str>,
-        project: Option<&str>,
-        priority: Option<u8>,
-        tags: Vec<String>,
-    ) -> Result<RecurringTemplate, String> {
-        self.ensure_recurring_folder_exists()?;
-
-        let template_id = Self::generate_template_id();
-        let filename = format!("{}.md", sanitize_filename(&title));
-        let file_path = self.get_recurring_folder_path().join(&filename);
-
-        let recurrence_type_str = match recurrence_type {
-            RecurrenceType::Fixed => "fixed",
-            RecurrenceType::AfterCompletion => "after_completion",
-        };
-
-        let interval_unit_str = match interval_unit {
-            IntervalUnit::Days => "days",
-            IntervalUnit::Weeks => "weeks",
-            IntervalUnit::Months => "months",
-            IntervalUnit::Years => "years",
-        };
-
-        // Build the task line
-        let mut task_parts = vec![title.to_string()];
-        if let Some(proj) = project {
-            task_parts.push(format!("[[{}]]", proj));
-        }
-        if let Some(p) = priority {
-            task_parts.push(format!("!({})", p));
-        }
-        for tag in &tags {
-            task_parts.push(format!("#{}", tag));
-        }
-
-        let task_line = format!("- [ ] {}", task_parts.join(" "));
-        let notes_content = notes.map(|n| format!("    {}", n.replace('\n', "\n    "))).unwrap_or_default();
-
-        // Build YAML frontmatter
-        let start_date_line = start_date.map(|d| format!("start_date: {}\n", d)).unwrap_or_default();
-
-        let content = format!(
-            "---\nrecurrence_type: {}\ninterval: {}\ninterval_unit: {}\n{}template_id: {}\nannado_exclude: true\n---\n\n{}\n{}",
-            recurrence_type_str,
-            interval,
-            interval_unit_str,
-            start_date_line,
-            template_id,
-            task_line,
-            if notes_content.is_empty() { String::new() } else { format!("\n{}", notes_content) }
-        );
-
-        fs::write(&file_path, content)
-            .map_err(|e| format!("Failed to create recurring template: {}", e))?;
-
-        // Create the first instance immediately (atomically with template creation)
-        let instance_date = start_date
-            .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-            .unwrap_or_else(|| Local::now().date_naive());
-
-        let template_for_instance = RecurringTemplate {
-            template_id: template_id.clone(),
-            title: title.to_string(),
-            notes: notes.unwrap_or("").to_string(),
-            recurrence_type: recurrence_type.clone(),
-            interval,
-            interval_unit: interval_unit.clone(),
-            start_date: start_date.map(|s| s.to_string()),
-            last_generated: None,
-            last_completed: None,
-            file_path: file_path.to_string_lossy().to_string(),
-            projects: project.map(|p| vec![p.to_string()]).unwrap_or_default(),
-            priority,
-            tags: tags.clone(),
-        };
-
-        // Create instance (ignore error if already exists - shouldn't happen for new template)
-        let _ = self.create_recurring_instance(&template_for_instance, instance_date);
-
-        // Update last_generated in the template file
-        let date_str = instance_date.format("%Y-%m-%d").to_string();
-        self.update_template_last_generated(&template_for_instance, &date_str)?;
-
-        Ok(RecurringTemplate {
-            template_id,
-            title: title.to_string(),
-            notes: notes.unwrap_or("").to_string(),
-            recurrence_type,
-            interval,
-            interval_unit,
-            start_date: start_date.map(|s| s.to_string()),
-            last_generated: Some(date_str),
-            last_completed: None,
-            file_path: file_path.to_string_lossy().to_string(),
-            projects: project.map(|p| vec![p.to_string()]).unwrap_or_default(),
-            priority,
-            tags,
-        })
-    }
-
-    /// Update an existing recurring template
-    pub fn update_recurring_template(
-        &self,
-        template_id: &str,
-        title: Option<&str>,
-        notes: Option<&str>,
-        recurrence_type: Option<RecurrenceType>,
-        interval: Option<u32>,
-        interval_unit: Option<IntervalUnit>,
-        start_date: Option<&str>,
-        project: Option<&str>,
-        priority: Option<Option<u8>>,
-        tags: Option<Vec<String>>,
-    ) -> Result<RecurringTemplate, String> {
-        // Find the template
+    /// Migrate legacy recurring templates + their `@recurring(<id>)` instances to the
+    /// inline `@repeat(<rule>)` model. `apply == false` is a dry-run (no writes).
+    pub fn migrate_recurrence(&self, apply: bool) -> Result<MigrationReport, String> {
         let templates = self.get_all_recurring_templates();
-        let template = templates.iter()
-            .find(|t| t.template_id == template_id)
-            .ok_or("Template not found")?;
-
-        let file_path = PathBuf::from(&template.file_path);
-
-        // Update values
-        let new_title = title.unwrap_or(&template.title);
-        let new_notes = notes.unwrap_or(&template.notes);
-        let new_recurrence_type = recurrence_type.clone().unwrap_or(template.recurrence_type.clone());
-        let new_interval = interval.unwrap_or(template.interval);
-        let new_interval_unit = interval_unit.clone().unwrap_or(template.interval_unit.clone());
-        let new_start_date = start_date.map(|s| s.to_string()).or_else(|| template.start_date.clone());
-        let new_priority = priority.unwrap_or(template.priority);
-        let new_tags = tags.clone().unwrap_or(template.tags.clone());
-        let new_projects = if let Some(proj) = project {
-            if proj.is_empty() {
-                Vec::new()
-            } else {
-                vec![proj.to_string()]
-            }
-        } else {
-            template.projects.clone()
-        };
-
-        let recurrence_type_str = match new_recurrence_type {
-            RecurrenceType::Fixed => "fixed",
-            RecurrenceType::AfterCompletion => "after_completion",
-        };
-
-        let interval_unit_str = match new_interval_unit {
-            IntervalUnit::Days => "days",
-            IntervalUnit::Weeks => "weeks",
-            IntervalUnit::Months => "months",
-            IntervalUnit::Years => "years",
-        };
-
-        // Build the task line
-        let mut task_parts = vec![new_title.to_string()];
-        for proj in &new_projects {
-            task_parts.push(format!("[[{}]]", proj));
-        }
-        if let Some(p) = new_priority {
-            task_parts.push(format!("!({})", p));
-        }
-        for tag in &new_tags {
-            task_parts.push(format!("#{}", tag));
-        }
-
-        let task_line = format!("- [ ] {}", task_parts.join(" "));
-        let notes_content = if new_notes.is_empty() {
-            String::new()
-        } else {
-            format!("\n    {}", new_notes.replace('\n', "\n    "))
-        };
-
-        // Preserve last_generated and last_completed
-        let mut yaml_lines = vec![
-            "---".to_string(),
-            format!("recurrence_type: {}", recurrence_type_str),
-            format!("interval: {}", new_interval),
-            format!("interval_unit: {}", interval_unit_str),
-        ];
-        if let Some(ref sd) = new_start_date {
-            yaml_lines.push(format!("start_date: {}", sd));
-        }
-        if let Some(ref lg) = template.last_generated {
-            yaml_lines.push(format!("last_generated: {}", lg));
-        }
-        if let Some(ref lc) = template.last_completed {
-            yaml_lines.push(format!("last_completed: {}", lc));
-        }
-        yaml_lines.push(format!("template_id: {}", template_id));
-        yaml_lines.push("---".to_string());
-
-        let content = format!(
-            "{}\n\n{}{}",
-            yaml_lines.join("\n"),
-            task_line,
-            notes_content
-        );
-
-        fs::write(&file_path, content)
-            .map_err(|e| format!("Failed to update recurring template: {}", e))?;
-
-        Ok(RecurringTemplate {
-            template_id: template_id.to_string(),
-            title: new_title.to_string(),
-            notes: new_notes.to_string(),
-            recurrence_type: new_recurrence_type,
-            interval: new_interval,
-            interval_unit: new_interval_unit,
-            start_date: new_start_date,
-            last_generated: template.last_generated.clone(),
-            last_completed: template.last_completed.clone(),
-            file_path: file_path.to_string_lossy().to_string(),
-            projects: new_projects,
-            priority: new_priority,
-            tags: new_tags,
-        })
-    }
-
-    /// Delete a recurring template
-    pub fn delete_recurring_template(&self, template_id: &str) -> Result<(), String> {
-        let templates = self.get_all_recurring_templates();
-        let template = templates.iter()
-            .find(|t| t.template_id == template_id)
-            .ok_or("Template not found")?;
-
-        fs::remove_file(&template.file_path)
-            .map_err(|e| format!("Failed to delete recurring template: {}", e))?;
-
-        Ok(())
-    }
-
-    /// Check if an instance should be generated for a template today
-    fn should_generate_instance(&self, template: &RecurringTemplate, today: NaiveDate) -> bool {
-        // For first generation (never generated before), always create the instance immediately
-        // The instance will use start_date as its when date (handled in generate_recurring_instances)
-        // so it appears in Upcoming view if start_date is in the future
-        if template.last_generated.is_none() {
-            return true;
-        }
-
-        // For subsequent generations, follow normal recurrence logic
-        // (start_date only affects the first instance, not subsequent ones)
-        match template.recurrence_type {
-            RecurrenceType::Fixed => {
-                // Generate if enough time has passed since last generation
-                if let Some(ref last_gen) = template.last_generated {
-                    if let Ok(last_date) = NaiveDate::parse_from_str(last_gen, "%Y-%m-%d") {
-                        let next_date = self.calculate_next_date(last_date, template.interval, &template.interval_unit);
-                        today >= next_date
-                    } else {
-                        true
-                    }
-                } else {
-                    true // Should not reach here due to early return above
-                }
-            }
-            RecurrenceType::AfterCompletion => {
-                // Only generate if the previous instance was completed
-                match &template.last_completed {
-                    None => {
-                        // If never completed, don't generate another instance
-                        false
-                    }
-                    Some(last_comp) => {
-                        if let Ok(last_date) = NaiveDate::parse_from_str(last_comp, "%Y-%m-%d") {
-                            let next_date = self.calculate_next_date(last_date, template.interval, &template.interval_unit);
-                            today >= next_date
-                        } else {
-                            false
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Calculate the next date based on interval and unit
-    fn calculate_next_date(&self, from_date: NaiveDate, interval: u32, unit: &IntervalUnit) -> NaiveDate {
-        match unit {
-            IntervalUnit::Days => from_date + chrono::Duration::days(interval as i64),
-            IntervalUnit::Weeks => from_date + chrono::Duration::weeks(interval as i64),
-            IntervalUnit::Months => from_date
-                .checked_add_months(Months::new(interval))
-                .unwrap_or(from_date),
-            IntervalUnit::Years => from_date
-                .checked_add_months(Months::new(interval * 12))
-                .unwrap_or(from_date),
-        }
-    }
-
-    /// Update the last_generated field in a template file
-    /// Set (or insert) a scalar field inside a template file's YAML frontmatter.
-    /// Edits the frontmatter lines directly so the rest of the file, key order,
-    /// and formatting stay untouched.
-    fn update_template_yaml_field(file_path: &str, field: &str, value: &str) -> Result<(), String> {
-        let content = fs::read_to_string(file_path)
-            .map_err(|e| format!("Failed to read template: {}", e))?;
-
-        let mut lines: Vec<String> = content.lines().map(String::from).collect();
-        if lines.first().map(|l| l.trim() != "---").unwrap_or(true) {
-            return Err("Template has no frontmatter".to_string());
-        }
-        let end = lines
-            .iter()
-            .enumerate()
-            .skip(1)
-            .find(|(_, l)| l.trim() == "---")
-            .map(|(i, _)| i)
-            .ok_or("Template frontmatter is not closed")?;
-
-        let prefix = format!("{}:", field);
-        if let Some(line) = lines[1..end].iter_mut().find(|l| l.trim_start().starts_with(&prefix)) {
-            *line = format!("{} {}", prefix, value);
-        } else {
-            lines.insert(end, format!("{} {}", prefix, value));
-        }
-
-        fs::write(file_path, lines.join("\n"))
-            .map_err(|e| format!("Failed to update template: {}", e))
-    }
-
-    fn update_template_last_generated(&self, template: &RecurringTemplate, date: &str) -> Result<(), String> {
-        Self::update_template_yaml_field(&template.file_path, "last_generated", date)
-    }
-
-    /// Update the last_completed field in a template file
-    pub fn update_template_last_completed(&self, template_id: &str, date: &str) -> Result<(), String> {
-        let templates = self.get_all_recurring_templates();
-        let template = templates.iter()
-            .find(|t| t.template_id == template_id)
-            .ok_or("Template not found")?;
-        Self::update_template_yaml_field(&template.file_path, "last_completed", date)
-    }
-
-    /// Generate recurring task instances for today
-    pub fn generate_recurring_instances(&self) -> Result<Vec<Task>, String> {
         let today = Local::now().date_naive();
-        let templates = self.get_all_recurring_templates();
-        // Use cached tasks (not scan()) to avoid race conditions
-        let existing_tasks = self.get_tasks();
-        let mut created_tasks = Vec::new();
+        let project_names = self.project_names_set();
+        let mut report = MigrationReport {
+            templates: templates.len(),
+            new_tasks: Vec::new(),
+            instances_deorphaned: 0,
+            instances_removed: 0,
+            backup_path: None,
+        };
 
-        for template in templates {
-            if self.should_generate_instance(&template, today) {
-                // Check if an uncompleted instance already exists for this template
-                // This prevents duplicates even if the function is called multiple times
-                let already_exists = existing_tasks.iter().any(|t| {
-                    t.recurring_template_id.as_ref() == Some(&template.template_id) && !t.completed
-                });
+        if apply {
+            report.backup_path = Some(self.backup_vault()?);
+        }
 
-                if already_exists {
-                    continue; // Skip, uncompleted instance already exists
-                }
-
-                // For first generation, use start_date if set; otherwise use today
-                let instance_date = if template.last_generated.is_none() {
-                    if let Some(ref start_date_str) = template.start_date {
-                        NaiveDate::parse_from_str(start_date_str, "%Y-%m-%d").unwrap_or(today)
-                    } else {
-                        today
-                    }
-                } else {
-                    today
-                };
-
-                // Create an instance in the daily note
-                // create_recurring_instance will return an error if instance already exists in file
-                match self.create_recurring_instance(&template, instance_date) {
-                    Ok(task) => {
-                        created_tasks.push(task);
-
-                        // Update last_generated
-                        let date_str = instance_date.format("%Y-%m-%d").to_string();
-                        self.update_template_last_generated(&template, &date_str)?;
-                    }
-                    Err(e) if e.contains("already exists") => {
-                        // Instance already exists in file, skip silently
-                        continue;
-                    }
-                    Err(e) => return Err(e),
-                }
+        // 1. One inline recurring task per template, dated at its next occurrence.
+        for template in &templates {
+            let mode = match template.recurrence_type {
+                RecurrenceType::Fixed => crate::recurrence::RecurrenceMode::Fixed,
+                RecurrenceType::AfterCompletion => crate::recurrence::RecurrenceMode::WhenDone,
+            };
+            let rec = crate::recurrence::Recurrence {
+                interval: template.interval,
+                unit: template.interval_unit.clone(),
+                mode,
+                raw: None,
+            };
+            let next = self.template_next_date(template, &rec, today);
+            let task = build_inline_recurring_task(template, rec, next);
+            let file_project = derive_project_name(&task.file_path);
+            report
+                .new_tasks
+                .push(parser::format_task_line_with_marker(&task, today, file_project.as_deref(), &project_names, crate::taskformat::TaskFormat::Annado, &self.current_task_marker()));
+            if apply {
+                self.write_inline_recurring_task(&task, next)?;
             }
         }
 
-        Ok(created_tasks)
+        // 2. Rewrite legacy `@recurring(<id>)` instances across the vault.
+        let template_ids: std::collections::HashSet<String> =
+            templates.iter().map(|t| t.template_id.clone()).collect();
+        let (deorphaned, removed) = self.rewrite_legacy_recurring_instances(&template_ids, apply)?;
+        report.instances_deorphaned = deorphaned;
+        report.instances_removed = removed;
+
+        // 3. Delete the template files.
+        if apply {
+            for template in &templates {
+                let _ = fs::remove_file(&template.file_path);
+            }
+            self.scan(); // refresh cache after the migration's writes
+        }
+
+        Ok(report)
     }
 
-    /// Create a single recurring task instance
-    fn create_recurring_instance(&self, template: &RecurringTemplate, date: NaiveDate) -> Result<Task, String> {
+    fn project_names_set(&self) -> std::collections::HashSet<String> {
+        self.get_all_projects().into_iter().map(|p| p.name).collect()
+    }
+
+    /// The next occurrence date for a template: roll forward from its last activity
+    /// (else its start date, else today) to the first occurrence that is today or later,
+    /// so migrated tasks don't land in the past.
+    fn template_next_date(
+        &self,
+        template: &RecurringTemplate,
+        rec: &crate::recurrence::Recurrence,
+        today: NaiveDate,
+    ) -> NaiveDate {
+        let parse = |s: &Option<String>| {
+            s.as_ref()
+                .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+        };
+        let mut date = if let Some(last) =
+            parse(&template.last_completed).or_else(|| parse(&template.last_generated))
+        {
+            crate::recurrence::next_date(rec, last).unwrap_or(today)
+        } else if let Some(start) = parse(&template.start_date) {
+            start
+        } else {
+            today
+        };
+        // Advance to the next occurrence that is today or later (modeled rules only).
+        let mut guard = 0;
+        while date < today && guard < 1000 {
+            match crate::recurrence::next_date(rec, date) {
+                Some(d) if d > date => date = d,
+                _ => break,
+            }
+            guard += 1;
+        }
+        date
+    }
+
+    /// Append a migrated inline recurring task into the daily note for `date`.
+    fn write_inline_recurring_task(&self, task: &Task, date: NaiveDate) -> Result<(), String> {
         let file_path = self.get_daily_note_path(date);
         self.ensure_daily_note_exists(&file_path, date)?;
-
-        // Use file-based lock to prevent concurrent instance creation
-        let lock_path = file_path.with_extension("md.lock");
-        let lock_file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path);
-
-        let _lock_guard = match lock_file {
-            Ok(_f) => Some(()),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(format!("Instance creation already in progress for {}", date));
-            }
-            Err(_e) => {
-                // If we can't create lock (e.g., permissions), proceed without lock
-                // This is a fallback to avoid blocking on non-critical errors
-                None
-            }
-        };
-
-        // Ensure lock is cleaned up on function exit
-        struct LockCleanup<'a>(&'a Path);
-        impl<'a> Drop for LockCleanup<'a> {
-            fn drop(&mut self) {
-                let _ = fs::remove_file(self.0);
-            }
-        }
-        let _cleanup = LockCleanup(&lock_path);
-
         let content = fs::read_to_string(&file_path).unwrap_or_default();
-
-        // Check if this template's instance already exists in this file
-        // This prevents duplicates even with concurrent calls
-        let recurring_marker = format!("@recurring({})", template.template_id);
-        if content.contains(&recurring_marker) {
-            // Instance already exists, return a dummy task (will be filtered by caller)
-            return Err(format!("Instance for template {} already exists", template.template_id));
-        }
-
-        let line_count = content.lines().count();
-        let new_line_number = line_count + 1;
-
-        // Build task line with all metadata
-        let mut parts = vec![template.title.clone()];
-        parts.push(format!("@when({})", date.format("%Y-%m-%d")));
-
-        for project in &template.projects {
-            parts.push(format!("[[{}]]", project));
-        }
-
-        if let Some(p) = template.priority {
-            parts.push(format!("!({})", p));
-        }
-
-        for tag in &template.tags {
-            parts.push(format!("#{}", tag));
-        }
-
-        parts.push(format!("@recurring({})", template.template_id));
-
-        let task_line = format!("- [ ] {}", parts.join(" "));
-
-        // Add notes as indented lines after the task
-        let task_with_notes = if !template.notes.is_empty() {
-            let indented_notes = template.notes
-                .lines()
-                .map(|line| format!("    {}", line))
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!("{}\n{}", task_line, indented_notes)
-        } else {
-            task_line
-        };
-
+        let today = Local::now().date_naive();
+        let file_project = derive_project_name(&file_path.to_string_lossy());
+        let project_names = self.project_names_set();
+        let task_line = parser::format_task_line_with_marker(task, today, file_project.as_deref(), &project_names, crate::taskformat::TaskFormat::Annado, &self.current_task_marker());
         let new_content = if content.ends_with('\n') || content.is_empty() {
-            format!("{}{}\n", content, task_with_notes)
+            format!("{}{}\n", content, task_line)
         } else {
-            format!("{}\n{}\n", content, task_with_notes)
+            format!("{}\n{}\n", content, task_line)
         };
+        fs::write(&file_path, new_content).map_err(|e| format!("Failed to write daily note: {}", e))
+    }
 
-        fs::write(&file_path, new_content)
-            .map_err(|e| format!("Failed to write task: {}", e))?;
+    /// Walk every task file; for each line carrying `@recurring(<known-id>)`:
+    /// completed -> strip the marker (keep the line); uncompleted -> drop the line.
+    /// Returns (deorphaned, removed). Only writes when `apply`.
+    fn rewrite_legacy_recurring_instances(
+        &self,
+        template_ids: &std::collections::HashSet<String>,
+        apply: bool,
+    ) -> Result<(usize, usize), String> {
+        let mut deorphaned = 0usize;
+        let mut removed = 0usize;
 
-        let task = Task {
-            id: Task::generate_id(&file_path.to_string_lossy(), new_line_number),
-            title: template.title.clone(),
-            notes: template.notes.clone(),
-            when: WhenValue::Date(date.format("%Y-%m-%d").to_string()),
-            deadline: None,
-            tags: template.tags.clone(),
-            checklist: Vec::new(),
-            completed: false,
-            completed_date: None,
-            created_date: Some(date.format("%Y-%m-%d").to_string()),
-            file_path: file_path.to_string_lossy().to_string(),
-            line_number: new_line_number,
-            projects: template.projects.clone(),
-            indent_level: 0,
-            priority: template.priority,
-            persons: Vec::new(),
-            recurring_template_id: Some(template.template_id.clone()),
-            duration_minutes: None,
-            scheduled_time: None,
-        };
-
-        // Add to cache so subsequent get_tasks() calls include this instance
+        for entry in WalkDir::new(&self.path)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
         {
-            let mut task_map = self.tasks.write();
-            task_map.insert(task.id.clone(), task.clone());
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "md") {
+                if is_hidden_path(path) {
+                    continue;
+                }
+                let path_str = path.to_string_lossy();
+                let content = match fs::read_to_string(path) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                if Self::is_recurring_template(&content) {
+                    continue; // template files are deleted separately
+                }
+
+                let mut changed = false;
+                let mut out: Vec<String> = Vec::new();
+                for line in content.lines() {
+                    let (id, _) = parser::extract_recurring_id(line);
+                    let is_known = id.as_ref().map_or(false, |i| template_ids.contains(i));
+                    if !is_known {
+                        out.push(line.to_string());
+                        continue;
+                    }
+                    let id = id.unwrap();
+                    let completed = parser::parse_task_line(line).map_or(false, |p| p.completed);
+                    if completed {
+                        // Keep the historical line, strip the now-dead marker.
+                        let stripped = line
+                            .replace(&format!(" @recurring({})", id), "")
+                            .replace(&format!("@recurring({})", id), "")
+                            .trim_end()
+                            .to_string();
+                        out.push(stripped);
+                        deorphaned += 1;
+                        changed = true;
+                    } else {
+                        // Drop the uncompleted instance (collapsed into the new inline task).
+                        removed += 1;
+                        changed = true;
+                    }
+                }
+
+                if changed && apply {
+                    let mut new_content = out.join("\n");
+                    if content.ends_with('\n') {
+                        new_content.push('\n');
+                    }
+                    fs::write(path, new_content)
+                        .map_err(|e| format!("Failed to rewrite {}: {}", path_str, e))?;
+                }
+            }
         }
 
-        Ok(task)
+        Ok((deorphaned, removed))
+    }
+
+    /// Copy the whole vault to a timestamped sibling dir. Coarse but fine for a one-time op.
+    fn backup_vault(&self) -> Result<String, String> {
+        let stamp = Local::now().format("%Y%m%d-%H%M%S");
+        let dest = self
+            .path
+            .parent()
+            .ok_or("Vault has no parent directory")?
+            .join(format!(
+                "{}-backup-{}",
+                self.path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("vault"),
+                stamp
+            ));
+        for entry in WalkDir::new(&self.path)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let src = entry.path();
+            let rel = src.strip_prefix(&self.path).map_err(|e| e.to_string())?;
+            let target = dest.join(rel);
+            let ft = entry.file_type();
+            if ft.is_dir() {
+                fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+            } else if ft.is_file() {
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                fs::copy(src, &target).map_err(|e| e.to_string())?;
+            }
+            // Skip symlinks and other non-regular entries: a vault's .obsidian can
+            // contain symlinks (plugins), fs::copy can't handle them, and the migration
+            // doesn't follow symlinks either (follow_links(false)), so nothing inside
+            // them is modified — consistent to leave them out of the backup.
+        }
+        Ok(dest.to_string_lossy().to_string())
     }
 
     fn find_or_create_projects_root(&self) -> Result<PathBuf, String> {
@@ -2841,6 +2657,66 @@ impl Vault {
 mod tests {
     use super::*;
 
+    // Minimal Task with only the title set; everything else default-ish.
+    fn task_with_title(title: &str) -> Task {
+        Task {
+            id: "t".to_string(),
+            title: title.to_string(),
+            notes: String::new(),
+            when: WhenValue::Inbox,
+            deadline: None,
+            tags: Vec::new(),
+            checklist: Vec::new(),
+            completed: false,
+            completed_date: None,
+            created_date: None,
+            file_path: "x.md".to_string(),
+            line_number: 1,
+            projects: Vec::new(),
+            indent_level: 0,
+            priority: None,
+            persons: Vec::new(),
+            recurrence: None,
+            duration_minutes: None,
+            scheduled_time: None,
+        }
+    }
+
+    #[test]
+    fn resolve_wikilinks_assigns_known_project_and_preserves_unknown() {
+        let project_names: std::collections::HashSet<String> =
+            ["Privacy Seminar Company X".to_string()].into_iter().collect();
+        let person_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // Known project → assigned, link preserved in the title.
+        let mut known = task_with_title("Presentatie maken [[Privacy Seminar Company X]]");
+        resolve_wikilinks(std::slice::from_mut(&mut known), &person_names, &project_names);
+        assert_eq!(known.projects, vec!["Privacy Seminar Company X".to_string()]);
+        assert!(known.title.contains("[[Privacy Seminar Company X]]"));
+
+        // Unknown project → not assigned, link left untouched (renders as grey "create" chip).
+        let mut unknown = task_with_title("Presentatie maken [[Nonexistent Project]]");
+        resolve_wikilinks(std::slice::from_mut(&mut unknown), &person_names, &project_names);
+        assert!(unknown.projects.is_empty());
+        assert!(unknown.title.contains("[[Nonexistent Project]]"));
+    }
+
+    #[test]
+    fn is_recurring_template_requires_the_full_trio() {
+        // The real legacy template: all three keys present → detected.
+        let template = "---\nrecurrence_type: fixed\ninterval: 1\ninterval_unit: months\ntemplate_id: abc123\n---\n- [ ] Water plants !(2)";
+        assert!(Vault::is_recurring_template(template));
+
+        // Only template_id (e.g. a stray field in an unrelated note) → NOT a template.
+        assert!(!Vault::is_recurring_template("---\ntemplate_id: abc123\n---\nSome note"));
+        // Missing interval_unit → not enough signature.
+        assert!(!Vault::is_recurring_template("---\ntemplate_id: abc\nrecurrence_type: fixed\n---\nx"));
+        // Missing template_id → not a template.
+        assert!(!Vault::is_recurring_template("---\nrecurrence_type: fixed\ninterval_unit: days\n---\nx"));
+        // No frontmatter at all → false.
+        assert!(!Vault::is_recurring_template("- [ ] just a task #task"));
+    }
+
     #[test]
     fn test_is_path_excluded_folder_without_trailing_slash() {
         // Settings entry format: folder path with no trailing slash
@@ -2873,5 +2749,45 @@ mod tests {
         let excluded = vec!["Shopping List".to_string()];
         assert!(Vault::is_path_excluded(Path::new("/v/Shopping List.md"), vault, &excluded));
         assert!(!Vault::is_path_excluded(Path::new("/v/Shopping.md"), vault, &excluded));
+    }
+
+    #[test]
+    fn build_inline_recurring_task_maps_template_fields() {
+        let template = RecurringTemplate {
+            template_id: "abc".to_string(),
+            title: "Water plants".to_string(),
+            notes: "with rain water".to_string(),
+            recurrence_type: RecurrenceType::Fixed,
+            interval: 2,
+            interval_unit: IntervalUnit::Weeks,
+            start_date: Some("2026-06-16".to_string()),
+            last_generated: None,
+            last_completed: None,
+            file_path: "x.md".to_string(),
+            projects: vec!["Garden".to_string()],
+            priority: Some(2),
+            tags: vec!["home".to_string()],
+        };
+        let rec = crate::recurrence::Recurrence {
+            interval: 2,
+            unit: IntervalUnit::Weeks,
+            mode: crate::recurrence::RecurrenceMode::Fixed,
+            raw: None,
+        };
+        let next = NaiveDate::from_ymd_opt(2026, 6, 30).unwrap();
+        let task = build_inline_recurring_task(&template, rec.clone(), next);
+
+        assert_eq!(task.title, "Water plants");
+        assert_eq!(task.notes, "with rain water");
+        assert_eq!(task.when, WhenValue::Date("2026-06-30".to_string()));
+        assert_eq!(task.recurrence, Some(rec));
+        assert_eq!(task.projects, vec!["Garden".to_string()]);
+        assert_eq!(task.priority, Some(2));
+        assert_eq!(task.tags, vec!["home".to_string()]);
+        assert!(!task.completed);
+
+        let line =
+            parser::format_task_line(&task, next, None, &std::collections::HashSet::new(), crate::taskformat::TaskFormat::Annado);
+        assert!(line.contains("@repeat(every 2 weeks)"), "line: {line}");
     }
 }

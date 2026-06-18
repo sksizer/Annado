@@ -1,3 +1,4 @@
+use crate::taskformat::{self, TaskFormat};
 use chrono::NaiveDate;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,10 @@ static DUE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static TAG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"#(\w+)").unwrap()
+    // Allow nested tags (Obsidian-style): a leading word char, then word chars,
+    // forward slashes, or hyphens, e.g. #inbox/to-read. Obsidian permits '-' in tag
+    // names; a trailing slash is trimmed in extract_tags.
+    Regex::new(r"#(\w[\w/-]*)").unwrap()
 });
 
 static PROJECT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
@@ -34,22 +38,6 @@ static WIKILINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 
 static RECURRING_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"@recurring\(([^)]+)\)").unwrap()
-});
-
-static COMPLETED_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"@completed\(([^)]+)\)").unwrap()
-});
-
-static CREATED_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"@created\(([^)]+)\)").unwrap()
-});
-
-static DURATION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"@duration\(([^)]+)\)").unwrap()
-});
-
-static TIME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"@time\(([^)]+)\)").unwrap()
 });
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -183,7 +171,7 @@ pub struct Task {
     pub indent_level: usize,
     pub priority: Option<u8>, // 1 = high, 2 = medium, 3 = low
     pub persons: Vec<String>, // Persons associated via [[Person Name]] wiki-links
-    pub recurring_template_id: Option<String>, // Links to recurring template if this is an instance
+    pub recurrence: Option<crate::recurrence::Recurrence>, // Inline recurrence rule from @repeat()
     pub duration_minutes: Option<u32>, // Estimated duration in minutes from @duration()
     pub scheduled_time: Option<String>, // "HH:MM" from @time()
 }
@@ -242,7 +230,9 @@ pub fn extract_due(content: &str) -> (Option<String>, String) {
 pub fn extract_tags(content: &str) -> (Vec<String>, String) {
     let tags: Vec<String> = TAG_REGEX
         .captures_iter(content)
-        .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+        // Trim a trailing slash (Obsidian disallows #inbox/) and drop anything empty.
+        .filter_map(|cap| cap.get(1).map(|m| m.as_str().trim_end_matches('/').to_string()))
+        .filter(|t| !t.is_empty())
         .collect();
 
     let cleaned = TAG_REGEX.replace_all(content, "").to_string();
@@ -291,28 +281,6 @@ pub fn extract_recurring_id(content: &str) -> (Option<String>, String) {
     }
 }
 
-/// Extract completed date from content (e.g., @completed(2024-01-28) -> "2024-01-28")
-pub fn extract_completed_date(content: &str) -> (Option<String>, String) {
-    if let Some(caps) = COMPLETED_REGEX.captures(content) {
-        let date_str = caps.get(1).map(|m| m.as_str().to_string());
-        let cleaned = COMPLETED_REGEX.replace(content, "").to_string();
-        (date_str, cleaned.trim().to_string())
-    } else {
-        (None, content.to_string())
-    }
-}
-
-/// Extract created date from content (e.g., @created(2024-01-28) -> "2024-01-28")
-pub fn extract_created_date(content: &str) -> (Option<String>, String) {
-    if let Some(caps) = CREATED_REGEX.captures(content) {
-        let date_str = caps.get(1).map(|m| m.as_str().to_string());
-        let cleaned = CREATED_REGEX.replace(content, "").to_string();
-        (date_str, cleaned.trim().to_string())
-    } else {
-        (None, content.to_string())
-    }
-}
-
 /// Parse a duration string like "15m", "15min", "1h", "1h30m", "1h30min", "2h" into minutes
 pub fn parse_duration_str(s: &str) -> Option<u32> {
     let s = s.trim().to_lowercase();
@@ -352,29 +320,6 @@ pub fn format_duration(minutes: u32) -> String {
     }
 }
 
-/// Extract duration from content (e.g., @duration(1h30m) -> 90)
-pub fn extract_duration(content: &str) -> (Option<u32>, String) {
-    if let Some(caps) = DURATION_REGEX.captures(content) {
-        let dur_str = caps.get(1).map_or("", |m| m.as_str());
-        let duration = parse_duration_str(dur_str);
-        let cleaned = DURATION_REGEX.replace(content, "").to_string();
-        (duration, cleaned.trim().to_string())
-    } else {
-        (None, content.to_string())
-    }
-}
-
-/// Extract scheduled time from content (e.g., @time(09:00) -> "09:00")
-pub fn extract_time(content: &str) -> (Option<String>, String) {
-    if let Some(caps) = TIME_REGEX.captures(content) {
-        let time_str = caps.get(1).map_or("", |m| m.as_str()).to_string();
-        let cleaned = TIME_REGEX.replace(content, "").to_string();
-        (Some(time_str), cleaned.trim().to_string())
-    } else {
-        (None, content.to_string())
-    }
-}
-
 /// Extract project names from wiki-links in content, filtering only valid projects
 pub fn extract_projects_from_wikilinks(
     content: &str,
@@ -386,10 +331,20 @@ pub fn extract_projects_from_wikilinks(
         .collect()
 }
 
-pub fn parse_file(
+/// Marker-less convenience wrapper used by the test suite; the app calls
+/// `parse_file_with_marker` (the import-marker is always threaded through there).
+#[allow(dead_code)]
+pub fn parse_file(content: &str, file_path: &str, today: NaiveDate) -> Vec<Task> {
+    parse_file_with_marker(content, file_path, today, "")
+}
+
+/// Like `parse_file`, but when `marker` is non-empty only top-level checkboxes carrying
+/// that tag are imported (the tag is stripped from the task's displayed tags).
+pub fn parse_file_with_marker(
     content: &str,
     file_path: &str,
     today: NaiveDate,
+    marker: &str,
 ) -> Vec<Task> {
     let lines: Vec<&str> = content.lines().collect();
     let mut tasks: Vec<Task> = Vec::new();
@@ -404,16 +359,20 @@ pub fn parse_file(
         if let Some(parsed) = parse_task_line(line) {
             // This is a top-level task (indent 0 or minimal indent)
             if parsed.indent < 4 {
-                let (when, content_after_when) = extract_when(&parsed.content, today);
-                let (deadline, content_after_due) = extract_due(&content_after_when);
+                // Read any dialect (Annado / Obsidian Tasks / Dataview) via the format layer.
+                let (when, content_after_when) = taskformat::decode_when(&parsed.content, today);
+                let (deadline, content_after_due) = taskformat::decode_due(&content_after_when);
                 let (explicit_project, content_after_project) = extract_project(&content_after_due);
-                let (priority, content_after_priority) = extract_priority(&content_after_project);
-                let (recurring_template_id, content_after_recurring) = extract_recurring_id(&content_after_priority);
-                let (completed_date, content_after_completed) = extract_completed_date(&content_after_recurring);
-                let (created_date, content_after_created) = extract_created_date(&content_after_completed);
-                let (duration_minutes, content_after_duration) = extract_duration(&content_after_created);
-                let (scheduled_time, content_after_time) = extract_time(&content_after_duration);
-                let (tags, title) = extract_tags(&content_after_time);
+                let (priority, content_after_priority) = taskformat::decode_priority(&content_after_project);
+                // Strip any legacy @recurring(<id>) marker so it never leaks into the title.
+                // (The marker is otherwise consumed only by the recurrence migration.)
+                let (_legacy_recurring_id, content_after_recurring) = extract_recurring_id(&content_after_priority);
+                let (recurrence, content_after_repeat) = taskformat::decode_recurrence(&content_after_recurring);
+                let (completed_date, content_after_completed) = taskformat::decode_completed(&content_after_repeat);
+                let (created_date, content_after_created) = taskformat::decode_created(&content_after_completed);
+                let (duration_minutes, content_after_duration) = taskformat::decode_duration(&content_after_created);
+                let (scheduled_time, content_after_time) = taskformat::decode_time(&content_after_duration);
+                let (mut tags, title) = extract_tags(&content_after_time);
 
                 let mut notes = String::new();
                 let mut checklist: Vec<ChecklistItem> = Vec::new();
@@ -455,6 +414,17 @@ pub fn parse_file(
                     }
                 }
 
+                // Import marker filter: when configured, only import top-level checkboxes
+                // carrying the marker tag; strip the marker from the displayed tags.
+                // (Done after the look-ahead so a skipped parent's subtasks are skipped too.)
+                if !marker.is_empty() {
+                    if !tags_contain(&tags, marker) {
+                        i = j;
+                        continue;
+                    }
+                    tags.retain(|t| !t.eq_ignore_ascii_case(marker));
+                }
+
                 // Explicit @project() tag takes precedence over file-path derived project
                 let task_projects: Vec<String> = explicit_project
                     .or_else(|| project.clone())
@@ -478,7 +448,7 @@ pub fn parse_file(
                     indent_level: parsed.indent,
                     priority,
                     persons: Vec::new(), // Populated later in vault.rs after resolving wiki-links
-                    recurring_template_id,
+                    recurrence,
                     duration_minutes,
                     scheduled_time,
                 };
@@ -547,11 +517,43 @@ pub fn derive_project_name_with_pattern(file_path: &str, projects_pattern: &str)
     Some(last.to_string())
 }
 
+/// Normalize a configured import marker: strip a leading `#`, trim whitespace.
+pub fn normalize_marker(marker: &str) -> String {
+    marker.trim().trim_start_matches('#').trim().to_string()
+}
+
+/// Case-insensitive check for whether `tags` carries the import `marker` — matching the
+/// bare marker (`#task`) OR a nested tag under it (`#task/work`), so nested-tagged tasks
+/// aren't silently skipped. Matches on the tag's first path segment.
+pub fn tags_contain(tags: &[String], marker: &str) -> bool {
+    tags.iter().any(|t| {
+        let head = t.split('/').next().unwrap_or(t);
+        head.eq_ignore_ascii_case(marker)
+    })
+}
+
+/// Marker-less convenience wrapper used by the test suite; the app calls
+/// `format_task_line_with_marker` (the import-marker is always threaded through there).
+#[allow(dead_code)]
 pub fn format_task_line(
     task: &Task,
     today: NaiveDate,
     file_project: Option<&str>,
     project_names: &std::collections::HashSet<String>,
+    format: TaskFormat,
+) -> String {
+    format_task_line_with_marker(task, today, file_project, project_names, format, "")
+}
+
+/// Like `format_task_line`, but re-adds the configured import `marker` tag when set
+/// (so a task whose marker was stripped on read keeps it on write).
+pub fn format_task_line_with_marker(
+    task: &Task,
+    today: NaiveDate,
+    file_project: Option<&str>,
+    project_names: &std::collections::HashSet<String>,
+    format: TaskFormat,
+    marker: &str,
 ) -> String {
     let checkbox = if task.completed { "[x]" } else { "[ ]" };
     let indent = " ".repeat(task.indent_level);
@@ -578,14 +580,12 @@ pub fn format_task_line(
 
     let mut parts = vec![cleaned_title.clone()];
 
-    // Add @when if not inbox
-    if task.when != WhenValue::Inbox {
-        parts.push(format!("@when({})", task.when.to_string_value(today)));
+    // Write each field in the chosen format (Annado / Obsidian Tasks / Dataview).
+    if let Some(s) = taskformat::encode_when(&task.when, format, today) {
+        parts.push(s);
     }
-
-    // Add @due if present
-    if let Some(ref deadline) = task.deadline {
-        parts.push(format!("@due({})", deadline));
+    if let Some(s) = taskformat::encode_due(&task.deadline, format) {
+        parts.push(s);
     }
 
     // Add [[Project]] wikilinks for each project different from the file's implicit project
@@ -598,47 +598,239 @@ pub fn format_task_line(
         }
     }
 
-    // Add priority if present
-    if let Some(priority) = task.priority {
-        parts.push(format!("!({})", priority));
+    if let Some(s) = taskformat::encode_priority(task.priority, format) {
+        parts.push(s);
+    }
+    if let Some(s) = taskformat::encode_time(&task.scheduled_time, format) {
+        parts.push(s);
+    }
+    if let Some(s) = taskformat::encode_duration(task.duration_minutes, format) {
+        parts.push(s);
     }
 
-    // Add @time if present
-    if let Some(ref time) = task.scheduled_time {
-        parts.push(format!("@time({})", time));
-    }
-
-    // Add @duration if present
-    if let Some(dur) = task.duration_minutes {
-        parts.push(format!("@duration({})", format_duration(dur)));
-    }
-
-    // Add tags
+    // Add tags (identical across formats)
     for tag in &task.tags {
         parts.push(format!("#{}", tag));
     }
-
-    // Add recurring template ID if present
-    if let Some(ref template_id) = task.recurring_template_id {
-        parts.push(format!("@recurring({})", template_id));
+    // Re-add the import marker tag if configured and not already present.
+    if !marker.is_empty() && !tags_contain(&task.tags, marker) {
+        parts.push(format!("#{}", marker));
     }
 
-    // Add completed date if present
-    if let Some(ref date) = task.completed_date {
-        parts.push(format!("@completed({})", date));
+    if let Some(ref rec) = task.recurrence {
+        parts.push(taskformat::encode_recurrence(rec, format));
     }
-
-    // Add created date if present
-    if let Some(ref date) = task.created_date {
-        parts.push(format!("@created({})", date));
+    if let Some(s) = taskformat::encode_completed(&task.completed_date, format) {
+        parts.push(s);
+    }
+    if let Some(s) = taskformat::encode_created(&task.created_date, format) {
+        parts.push(s);
     }
 
     format!("{}- {} {}", indent, checkbox, parts.join(" "))
 }
 
+/// The next occurrence of a recurring task, given today's date (used for when_done mode).
+/// Returns None for non-recurring tasks or raw (unmodeled) rules.
+pub fn next_occurrence(task: &Task, today: NaiveDate) -> Option<Task> {
+    let rec = task.recurrence.as_ref()?;
+    let base = match rec.mode {
+        crate::recurrence::RecurrenceMode::WhenDone => today,
+        crate::recurrence::RecurrenceMode::Fixed => match &task.when {
+            WhenValue::Date(d) => NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()?,
+            _ => today,
+        },
+    };
+    let next = crate::recurrence::next_date(rec, base)?;
+    let mut t = task.clone();
+    t.completed = false;
+    t.completed_date = None;
+    t.when = WhenValue::Date(next.format("%Y-%m-%d").to_string());
+    // Advance the deadline too, if present, by the same rule.
+    if let Some(dl) = &task.deadline {
+        if let Ok(d) = NaiveDate::parse_from_str(dl, "%Y-%m-%d") {
+            if let Some(nd) = crate::recurrence::next_date(rec, d) {
+                t.deadline = Some(nd.format("%Y-%m-%d").to_string());
+            }
+        }
+    }
+    Some(t)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recurrence::RecurrenceMode;
+
+    #[test]
+    fn test_parse_file_reads_obsidian_tasks_and_dataview() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 17).unwrap();
+        // Obsidian Tasks emoji line
+        let t = parse_file("- [ ] Pay rent 📅 2026-07-01 ⏫ 🔁 every 2 weeks", "x.md", today);
+        assert_eq!(t[0].title, "Pay rent");
+        assert_eq!(t[0].deadline.as_deref(), Some("2026-07-01"));
+        assert_eq!(t[0].priority, Some(1));
+        assert_eq!(t[0].recurrence.as_ref().unwrap().interval, 2);
+        // Dataview inline-field line
+        let d = parse_file("- [ ] Review [due:: 2026-07-02] [priority:: low]", "x.md", today);
+        assert_eq!(d[0].title, "Review");
+        assert_eq!(d[0].deadline.as_deref(), Some("2026-07-02"));
+        assert_eq!(d[0].priority, Some(3));
+    }
+
+    #[test]
+    fn test_smart_filter_fields_identical_across_formats() {
+        // The smart filter ("Smart Lists") is format-agnostic by design: it runs in
+        // the frontend on the normalized Task struct and never sees raw markdown.
+        // This guarantee only holds if every dialect decodes the same logical task
+        // into identical values for the fields the filter reads (priority, deadline,
+        // created_date, when). Authored once per format, the parsed result must match.
+        let today = NaiveDate::from_ymd_opt(2026, 6, 17).unwrap();
+        let lines = [
+            "- [ ] Pay rent @when(2026-06-20) @due(2026-07-01) !(1) @created(2026-06-01)",
+            "- [ ] Pay rent ⏳ 2026-06-20 📅 2026-07-01 ⏫ ➕ 2026-06-01",
+            "- [ ] Pay rent [scheduled:: 2026-06-20] [due:: 2026-07-01] [priority:: high] [created:: 2026-06-01]",
+        ];
+        for line in lines {
+            let t = &parse_file(line, "x.md", today)[0];
+            assert_eq!(t.title, "Pay rent", "line: {line}");
+            assert_eq!(t.when, WhenValue::Date("2026-06-20".to_string()), "line: {line}");
+            assert_eq!(t.deadline.as_deref(), Some("2026-07-01"), "line: {line}");
+            assert_eq!(t.priority, Some(1), "line: {line}");
+            assert_eq!(t.created_date.as_deref(), Some("2026-06-01"), "line: {line}");
+        }
+    }
+
+    #[test]
+    fn test_format_task_line_round_trips_per_format() {
+        use crate::taskformat::TaskFormat;
+        let today = NaiveDate::from_ymd_opt(2026, 6, 17).unwrap();
+        let names = std::collections::HashSet::new();
+        let src = "- [ ] Pay rent @when(2026-06-20) @due(2026-07-01) !(1) @repeat(every 2 weeks)";
+        let task = &parse_file(src, "x.md", today)[0];
+        for fmt in [TaskFormat::Annado, TaskFormat::ObsidianTasks, TaskFormat::Dataview] {
+            let line = format_task_line(task, today, None, &names, fmt);
+            // Re-parse the formatted line; the structured values must survive.
+            let back = &parse_file(&line, "x.md", today)[0];
+            assert_eq!(back.title, "Pay rent", "fmt {:?} line {}", fmt, line);
+            assert_eq!(back.deadline.as_deref(), Some("2026-07-01"), "fmt {:?}", fmt);
+            assert_eq!(back.when, WhenValue::Date("2026-06-20".to_string()), "fmt {:?}", fmt);
+            assert_eq!(back.priority, Some(1), "fmt {:?}", fmt);
+            assert_eq!(back.recurrence.as_ref().unwrap().interval, 2, "fmt {:?}", fmt);
+        }
+    }
+
+    #[test]
+    fn test_import_marker_filters_and_strips() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 17).unwrap();
+        let content = "- [ ] A #task #home\n- [ ] B #home";
+        // With marker "task": only A imports, and #task is stripped from its tags.
+        let marked = parse_file_with_marker(content, "x.md", today, "task");
+        assert_eq!(marked.len(), 1);
+        assert_eq!(marked[0].title, "A");
+        assert!(marked[0].tags.contains(&"home".to_string()));
+        assert!(!marked[0].tags.iter().any(|t| t.eq_ignore_ascii_case("task")));
+        // Blank marker imports both.
+        assert_eq!(parse_file(content, "x.md", today).len(), 2);
+    }
+
+    #[test]
+    fn test_import_marker_case_insensitive() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 17).unwrap();
+        let t = parse_file_with_marker("- [ ] A #Task", "x.md", today, "task");
+        assert_eq!(t.len(), 1);
+    }
+
+    #[test]
+    fn test_import_marker_matches_nested_tag() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 17).unwrap();
+        // A task tagged with a NESTED marker (#task/work) must still import, not be skipped.
+        let t = parse_file_with_marker("- [ ] A #task/work", "x.md", today, "task");
+        assert_eq!(t.len(), 1);
+        // The nested tag is kept (only the bare #task marker is stripped from display).
+        assert_eq!(t[0].tags, vec!["task/work".to_string()]);
+        // A different parent must NOT match (e.g. #work/task is not the `task` marker).
+        let skipped = parse_file_with_marker("- [ ] B #work/task", "x.md", today, "task");
+        assert_eq!(skipped.len(), 0);
+        // A tag that merely starts with the marker text but isn't a path segment must not match.
+        let not_seg = parse_file_with_marker("- [ ] C #taskforce", "x.md", today, "task");
+        assert_eq!(not_seg.len(), 0);
+    }
+
+    #[test]
+    fn test_import_marker_round_trips_on_write() {
+        use crate::taskformat::TaskFormat;
+        let today = NaiveDate::from_ymd_opt(2026, 6, 17).unwrap();
+        let names = std::collections::HashSet::new();
+        let task = &parse_file_with_marker("- [ ] A #task #home", "x.md", today, "task")[0];
+        // Marker was stripped from tags; the writer re-adds it (no duplication).
+        let line = format_task_line_with_marker(task, today, None, &names, TaskFormat::Annado, "task");
+        assert_eq!(line.matches("#task").count(), 1, "line: {line}");
+        // Re-parse with the marker → still imported.
+        assert_eq!(parse_file_with_marker(&line, "x.md", today, "task").len(), 1);
+    }
+
+    #[test]
+    fn test_import_marker_skips_subtasks_of_unmarked_parent() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 17).unwrap();
+        // Unmarked parent with an (indented) subtask: neither should import.
+        let content = "- [ ] Parent\n    - [ ] Child";
+        assert_eq!(parse_file_with_marker(content, "x.md", today, "task").len(), 0);
+    }
+
+    #[test]
+    fn test_roundtrip_repeat_rule() {
+        let content = "- [ ] Water plants @when(2026-06-16) @repeat(every 2 weeks)";
+        let today = NaiveDate::from_ymd_opt(2026, 6, 16).unwrap();
+        let tasks = parse_file(content, "test.md", today);
+        assert_eq!(tasks.len(), 1);
+        let rec = tasks[0].recurrence.as_ref().expect("recurrence parsed");
+        assert_eq!(rec.interval, 2);
+        assert_eq!(rec.unit, IntervalUnit::Weeks);
+        assert_eq!(rec.mode, RecurrenceMode::Fixed);
+        let line = format_task_line(&tasks[0], today, None, &std::collections::HashSet::new(), TaskFormat::Annado);
+        assert!(line.contains("@repeat(every 2 weeks)"), "line was: {line}");
+    }
+
+    #[test]
+    fn test_next_occurrence_advances_scheduled_date_for_fixed() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 16).unwrap();
+        let tasks = parse_file(
+            "- [ ] Pay rent @when(2026-06-16) @repeat(every 2 weeks)",
+            "test.md",
+            today,
+        );
+        let next = next_occurrence(&tasks[0], today).expect("next occurrence");
+        assert_eq!(next.when, WhenValue::Date("2026-06-30".to_string()));
+        assert!(!next.completed);
+        assert_eq!(next.completed_date, None);
+    }
+
+    #[test]
+    fn test_next_occurrence_uses_completion_date_for_when_done() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 20).unwrap();
+        let tasks = parse_file(
+            "- [ ] Clean @when(2026-06-16) @repeat(every week when done)",
+            "test.md",
+            today,
+        );
+        let next = next_occurrence(&tasks[0], today).expect("next occurrence");
+        // Computed from today (2026-06-20), not the scheduled date.
+        assert_eq!(next.when, WhenValue::Date("2026-06-27".to_string()));
+    }
+
+    #[test]
+    fn test_next_occurrence_none_for_raw_or_nonrecurring() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 16).unwrap();
+        let plain = parse_file("- [ ] Just a task @when(2026-06-16)", "test.md", today);
+        assert!(next_occurrence(&plain[0], today).is_none());
+        let raw = parse_file(
+            "- [ ] Standup @when(2026-06-16) @repeat(every weekday)",
+            "test.md",
+            today,
+        );
+        assert!(next_occurrence(&raw[0], today).is_none());
+    }
 
     #[test]
     fn test_parse_simple_task() {
@@ -672,6 +864,27 @@ mod tests {
 
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].tags, vec!["errands", "shopping"]);
+    }
+
+    #[test]
+    fn test_parse_nested_tags() {
+        let content = "- [ ] Read paper #inbox/to-read #inbox #ml/papers/2024";
+        let today = NaiveDate::from_ymd_opt(2024, 1, 28).unwrap();
+        let tasks = parse_file(content, "test.md", today);
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].tags, vec!["inbox/to-read", "inbox", "ml/papers/2024"]);
+        // The full nested tag is stripped from the title, not left behind.
+        assert_eq!(tasks[0].title, "Read paper");
+    }
+
+    #[test]
+    fn test_parse_tag_trailing_slash_trimmed() {
+        let content = "- [ ] Task #inbox/";
+        let today = NaiveDate::from_ymd_opt(2024, 1, 28).unwrap();
+        let tasks = parse_file(content, "test.md", today);
+
+        assert_eq!(tasks[0].tags, vec!["inbox"]);
     }
 
     #[test]
@@ -772,12 +985,12 @@ mod tests {
             indent_level: 0,
             priority: None,
             persons: Vec::new(),
-            recurring_template_id: None,
+            recurrence: None,
             duration_minutes: None,
             scheduled_time: None,
         };
 
-        let line = format_task_line(&task, today, None, &project_names);
+        let line = format_task_line(&task, today, None, &project_names, TaskFormat::Annado);
         assert!(line.contains("@created(2026-02-10)"));
         assert_eq!(line, "- [ ] Test task @when(2026-02-14) @created(2026-02-10)");
     }
@@ -792,7 +1005,7 @@ mod tests {
         assert_eq!(tasks[0].created_date, Some("2026-02-14".to_string()));
 
         let project_names = std::collections::HashSet::new();
-        let formatted = format_task_line(&tasks[0], today, None, &project_names);
+        let formatted = format_task_line(&tasks[0], today, None, &project_names, TaskFormat::Annado);
         assert_eq!(formatted, "- [ ] Boodschappen doen @when(2026-02-14) @created(2026-02-14)");
     }
 
@@ -839,7 +1052,7 @@ mod tests {
         assert_eq!(tasks[0].scheduled_time, Some("14:00".to_string()));
 
         let project_names = std::collections::HashSet::new();
-        let formatted = format_task_line(&tasks[0], today, None, &project_names);
+        let formatted = format_task_line(&tasks[0], today, None, &project_names, TaskFormat::Annado);
         assert_eq!(formatted, "- [ ] Task @when(2026-02-16) @time(14:00) @duration(45m)");
     }
 

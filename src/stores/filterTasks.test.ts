@@ -32,7 +32,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     indentLevel: 0,
     priority: null,
     persons: [],
-    recurringTemplateId: null,
+    recurrence: null,
     durationMinutes: null,
     scheduledTime: null,
     ...overrides,

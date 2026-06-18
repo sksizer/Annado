@@ -86,7 +86,7 @@ export interface Task {
   indentLevel: number;
   priority: number | null; // 1 = high, 2 = medium, 3 = low
   persons: string[]; // Persons associated via [[Person Name]] wiki-links
-  recurringTemplateId: string | null; // Links to recurring template if this is an instance
+  recurrence: Recurrence | null; // Inline recurrence rule from @repeat()
   durationMinutes: number | null; // Estimated duration in minutes from @duration()
   scheduledTime: string | null; // "HH:MM" from @time()
 }
@@ -103,6 +103,7 @@ export interface TaskUpdatePayload {
   priority?: number | null;
   durationMinutes?: number | null;
   scheduledTime?: string | null;
+  recurrence?: Recurrence | null;
 }
 
 export interface CreateTaskPayload {
@@ -152,53 +153,39 @@ export function createWhenValue(type: WhenType, date?: string): WhenValue {
   }
 }
 
-// Recurring task types
-export type RecurrenceType = 'fixed' | 'after_completion';
+// Task format dialect (read any, write the chosen one). Empty string = unset (first run).
+export type TaskFormat = 'annado' | 'obsidian_tasks' | 'dataview';
+
+export interface TaskFormatDetection {
+  suggested: TaskFormat;
+  annado: number;
+  obsidianTasks: number;
+  dataview: number;
+}
+
+// Recurrence (inline @repeat model)
 export type IntervalUnit = 'days' | 'weeks' | 'months' | 'years';
+export type RecurrenceMode = 'fixed' | 'when_done';
 
-export interface RecurringTemplate {
-  templateId: string;
-  title: string;
-  notes: string;
-  recurrenceType: RecurrenceType;
+export interface Recurrence {
   interval: number;
-  intervalUnit: IntervalUnit;
-  startDate: string | null;
-  lastGenerated: string | null;
-  lastCompleted: string | null;
-  filePath: string;
-  projects: string[];
-  priority: number | null;
-  tags: string[];
+  unit: IntervalUnit;
+  mode: RecurrenceMode;
+  // Set when the rule is outside Annado's modeled subset (e.g. "every weekday");
+  // round-tripped verbatim and not auto-advanced.
+  raw?: string | null;
 }
 
-export interface CreateRecurringTemplatePayload {
-  title: string;
-  notes?: string;
-  recurrenceType: RecurrenceType;
-  interval: number;
-  intervalUnit: IntervalUnit;
-  startDate?: string;
-  project?: string;
-  priority?: number | null;
-  tags?: string[];
-}
-
-export interface UpdateRecurringTemplatePayload {
-  templateId: string;
-  title?: string;
-  notes?: string;
-  recurrenceType?: RecurrenceType;
-  interval?: number;
-  intervalUnit?: IntervalUnit;
-  startDate?: string;
-  project?: string;
-  priority?: number | null;
-  tags?: string[];
+// Report from the one-time recurrence migration (template model -> inline @repeat model).
+export interface MigrationReport {
+  templates: number;
+  newTasks: string[];
+  instancesDeorphaned: number;
+  instancesRemoved: number;
+  backupPath: string | null;
 }
 
 export interface FolderPaths {
-  recurringTemplates: string;
   projectsPattern: string;
   areasPattern: string;
   personsPattern: string;

@@ -157,6 +157,8 @@ lossy `createTask` recreate).
 - [ ] AC-5: A Rust test in `src-tauri/src/vault.rs` asserts that `delete_task` followed by `restore_task` yields byte-identical file content and a restored task whose `id` equals the original.
 - [ ] AC-6: A vitest test in `src/stores/slices/taskSlice.test.ts` asserts `deleteTask` pushes exactly one entry onto `undoStack` and that executing that entry invokes the `restore_task` command with the captured snapshot.
 - [ ] AC-7: `pnpm run check` passes (tsc, eslint, vitest, cargo test).
+- [ ] AC-8: The delete affordance renders a recognizable waste-basket/trash glyph (the 🗑️ emoji) rather than an ad-hoc hand-drawn SVG path, so it reads unambiguously as "delete" and looks finished/professional.
+- [ ] AC-9: In the collapsed row, when the title text does NOT fill the title container, the delete button sits at the end of the title text (close to it — not pinned to the far right of the row); when the title text fills or exceeds the container width, the button is right-aligned to the container and overlays the text tail. In both cases hovering does not reflow the row's text (the button stays absolutely positioned).
 
 ## Out of scope
 

@@ -205,13 +205,21 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
         )}
 
         {/* Title content */}
-        <div className="relative flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex-1 min-w-0">
+          {/*
+            The title line shrinks to its content width (`w-fit max-w-full`), so
+            the delete button anchored to its right edge sits right at the END of
+            a short title (close to the text), and overlays the text tail —
+            right-aligned to the container — once the title fills the full width.
+            Absolute positioning means the button never reflows the row on hover,
+            which matters for the virtualized, content-visibility list.
+          */}
+          <div className="relative flex w-fit max-w-full items-center gap-2 flex-wrap">
             {!task.completed && getPriorityIndicator()}
             <InlineMarkdown
               text={task.title}
               wikilinkProps={titleWikilinkProps}
-              className={`text-[14px] leading-[1.4] ${
+              className={`min-w-0 break-words text-[14px] leading-[1.4] ${
                 task.completed
                   ? 'line-through text-[#A0A0A0] dark:text-[#666]'
                   : 'text-black/85 dark:text-white/85'
@@ -240,6 +248,24 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
                 </button>
               );
             })}
+
+            {/*
+              Delete affordance — 🗑️ emoji, anchored to the right edge of the
+              content-hugging title line. Absolute (not a flex sibling) so it
+              never reflows the row on hover.
+            */}
+            <button
+              type="button"
+              aria-label="Delete task"
+              title="Delete task"
+              onClick={(e) => {
+                e.stopPropagation();
+                requestDelete();
+              }}
+              className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-end pl-7 pr-0.5 text-[14px] leading-none bg-gradient-to-l from-[#F5F5F5] via-[#F5F5F5] to-transparent dark:from-[#252525] dark:via-[#252525] dark:to-transparent"
+            >
+              <span aria-hidden="true">🗑️</span>
+            </button>
           </div>
 
           {/* Checklist indicator */}
@@ -254,29 +280,6 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
               </span>
             </div>
           )}
-
-          {/*
-            Inline delete affordance. Absolutely positioned (never a flex sibling)
-            so it adds zero height to the row — the list is virtualized with
-            content-visibility:auto rows, and a hover affordance that changed the
-            measured row height would jitter the virtual list. A left-fading
-            gradient backdrop keeps the icon legible when it overlays a
-            full-width title's text tail.
-          */}
-          <button
-            type="button"
-            aria-label="Delete task"
-            title="Delete task"
-            onClick={(e) => {
-              e.stopPropagation();
-              requestDelete();
-            }}
-            className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center pl-6 pr-1 bg-gradient-to-l from-[#F5F5F5] via-[#F5F5F5] to-transparent dark:from-[#252525] dark:via-[#252525] text-[#999] hover:text-danger dark:text-[#777] dark:hover:text-danger"
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m-1 0v14a2 2 0 01-2 2H8a2 2 0 01-2-2V6h12z" />
-            </svg>
-          </button>
         </div>
 
         {/* Right side indicators */}

@@ -9,6 +9,8 @@ tags: []
 need_human_review: false
 impact: medium
 complexity: large
+prs:
+- https://github.com/sksizer/Annado/pull/13
 ---
 # Inline delete button for Todo rows with faithful undo
 

@@ -79,6 +79,47 @@ describe('taskSlice deleteTask / undo wiring', () => {
     expect(useTaskStore.getState().tasks.find((t) => t.id === 'abc123')).toEqual(restored);
   });
 
+  it('clears expanded + selected view state when the deleted task was open in the expanded view', async () => {
+    invokeMock.mockResolvedValueOnce(SNAPSHOT); // delete_task
+
+    // The task is open in the expanded editor and selected (the state the
+    // expanded-card Delete button operates from).
+    useTaskStore.setState({
+      tasks: [makeTask()],
+      undoStack: [],
+      expandedTaskId: 'abc123',
+      selectedTaskId: 'abc123',
+      selectedTaskIds: ['abc123'],
+    });
+
+    await useTaskStore.getState().deleteTask('abc123');
+
+    const s = useTaskStore.getState();
+    expect(s.tasks.find((t) => t.id === 'abc123')).toBeUndefined(); // removed from the list
+    expect(s.expandedTaskId).toBeNull(); // expanded card collapses
+    expect(s.selectedTaskId).toBeNull();
+    expect(s.selectedTaskIds).toEqual([]);
+  });
+
+  it('leaves an unrelated expanded/selected task untouched when a different task is deleted', async () => {
+    invokeMock.mockResolvedValueOnce(SNAPSHOT); // delete_task
+
+    useTaskStore.setState({
+      tasks: [makeTask(), makeTask({ id: 'other', lineNumber: 9 })],
+      undoStack: [],
+      expandedTaskId: 'other',
+      selectedTaskId: 'other',
+      selectedTaskIds: ['other'],
+    });
+
+    await useTaskStore.getState().deleteTask('abc123');
+
+    const s = useTaskStore.getState();
+    expect(s.expandedTaskId).toBe('other'); // unrelated expansion preserved
+    expect(s.selectedTaskId).toBe('other');
+    expect(s.selectedTaskIds).toEqual(['other']);
+  });
+
   it('records no undo entry when delete_task fails (rollback path)', async () => {
     invokeMock.mockRejectedValueOnce(new Error('boom'));
 

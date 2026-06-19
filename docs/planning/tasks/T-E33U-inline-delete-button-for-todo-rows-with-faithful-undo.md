@@ -159,6 +159,7 @@ lossy `createTask` recreate).
 - [ ] AC-7: `pnpm run check` passes (tsc, eslint, vitest, cargo test).
 - [ ] AC-8: The delete affordance renders a recognizable outline trash icon that matches the app's existing iconography (24×24 viewBox, `fill="none"`, `stroke="currentColor"`, round caps — Feather "trash-2" style), on both the inline row and the expanded card — not an emoji or an ad-hoc path.
 - [ ] AC-9: In the collapsed row, when there is room after the title text the delete button sits just past the end of the text with a small gap (close to it, not pinned to the far right of the row); once the title (nearly) fills the container width the button right-aligns to the container and overlays the text tail (with a left fade for legibility). The switch is driven by measuring the room left after the title. In both cases hovering does not reflow the row's text (the button stays absolutely positioned).
+- [ ] AC-10: Clicking Delete in the expanded task card deletes the task AND updates view state coherently: the deleted task is removed from the list, the expanded card collapses (`expandedTaskId` clears) and any selection referencing the task clears, while an unrelated expanded/selected task is left untouched. Verified by vitest tests in `src/stores/slices/taskSlice.test.ts`.
 
 ## Out of scope
 

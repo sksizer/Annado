@@ -46,6 +46,23 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
   const whenType = getWhenType(task.when);
   const rowRef = useRef<HTMLDivElement>(null);
 
+  // Delete-button placement (AC-9). The title line hugs its content; when there
+  // is room after it the trash icon sits just past the text, but once the title
+  // (nearly) fills the row the icon right-aligns and overlays the tail instead.
+  const titleWrapRef = useRef<HTMLDivElement>(null);
+  const [titleFillsWidth, setTitleFillsWidth] = useState(false);
+  useLayoutEffect(() => {
+    const el = titleWrapRef.current;
+    const container = el?.parentElement;
+    if (!el || !container) return;
+    // Overlay once the gap left after the title is too small to seat the icon.
+    const measure = () => setTitleFillsWidth(container.clientWidth - el.offsetWidth < 28);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [task.title, task.tags.length]);
+
   // Same wikilink/link context the expanded renderers use, so titles render
   // markdown identically. The name Sets come from context (built once per list).
   const titleWikilinkProps: WikilinkProps = useMemo(() => ({
@@ -214,7 +231,7 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
             Absolute positioning means the button never reflows the row on hover,
             which matters for the virtualized, content-visibility list.
           */}
-          <div className="relative flex w-fit max-w-full items-center gap-2 flex-wrap">
+          <div ref={titleWrapRef} className="relative flex w-fit max-w-full items-center gap-2 flex-wrap">
             {!task.completed && getPriorityIndicator()}
             <InlineMarkdown
               text={task.title}
@@ -250,9 +267,11 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
             })}
 
             {/*
-              Delete affordance — 🗑️ emoji, anchored to the right edge of the
-              content-hugging title line. Absolute (not a flex sibling) so it
-              never reflows the row on hover.
+              Delete affordance — outline trash icon (Feather "trash-2", matching
+              the app's 24×24 stroke iconography). Absolute (not a flex sibling)
+              so it never reflows the row on hover. Placement is driven by
+              titleFillsWidth: just past the text when there's room, else
+              right-aligned overlaying the tail (a left fade keeps it legible).
             */}
             <button
               type="button"
@@ -262,9 +281,18 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
                 e.stopPropagation();
                 requestDelete();
               }}
-              className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-end pl-7 pr-0.5 text-[14px] leading-none bg-gradient-to-l from-[#F5F5F5] via-[#F5F5F5] to-transparent dark:from-[#252525] dark:via-[#252525] dark:to-transparent"
+              className={`absolute top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center text-[#9A9AA0] hover:text-danger dark:text-[#777] dark:hover:text-danger ${
+                titleFillsWidth
+                  ? 'right-0 justify-end pl-7 bg-gradient-to-l from-[#F5F5F5] via-[#F5F5F5] to-transparent dark:from-[#252525] dark:via-[#252525] dark:to-transparent'
+                  : 'left-full ml-2'
+              }`}
             >
-              <span aria-hidden="true">🗑️</span>
+              <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M3 6h18" />
+                <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                <path d="M10 11v6M14 11v6" />
+              </svg>
             </button>
           </div>
 

@@ -13,12 +13,13 @@ interface TagSuggestionsProps {
 }
 
 const TAG_DROPDOWN_WIDTH = 200;
+const TAG_DROPDOWN_HEIGHT = 200;
 
 export function TagSuggestions({ suggestions, highlightedIndex, onSelect, tagColors, anchorRef }: TagSuggestionsProps) {
   // Render into document.body via a portal so the dropdown escapes the modal's
   // overflow-clip box (which would otherwise cut it off at the modal edge), the
   // same pattern the When/Deadline date pickers use.
-  const pos = usePickerPosition(anchorRef, suggestions.length > 0, TAG_DROPDOWN_WIDTH);
+  const pos = usePickerPosition(anchorRef, suggestions.length > 0, TAG_DROPDOWN_WIDTH, TAG_DROPDOWN_HEIGHT);
   if (suggestions.length === 0 || !pos) return null;
 
   return createPortal(

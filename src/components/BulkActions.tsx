@@ -1,12 +1,48 @@
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useTaskStore } from '../stores/taskStore';
 import { usePanelId } from '../contexts/PanelContext';
 import { WhenType, createWhenValue } from '../types/task';
 import { DeadlineButton } from './DeadlinePicker';
+import { ConfirmModal } from './ConfirmModal';
 
 export function BulkActions() {
   const panelId = usePanelId();
-  const { selectedTaskIds: mainIds, sidePanelSelectedTaskIds: sideIds, availableProjects, updateMultipleTasks, clearSelection } = useTaskStore();
+  const {
+    selectedTaskIds: mainIds, sidePanelSelectedTaskIds: sideIds, availableProjects,
+    updateMultipleTasks, deleteMultipleTasks, clearSelection, confirmDelete,
+    selectAllVisible, sidePanelSelectAllVisible,
+  } = useTaskStore();
   const selectedTaskIds = panelId === 'sidePanel' ? sideIds : mainIds;
+  const selectAll = panelId === 'sidePanel' ? sidePanelSelectAllVisible : selectAllVisible;
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // Center the bar over the list pane, but once the pane is narrower than the
+  // bar, shift it left so its right edge stays in view instead of being clipped.
+  const barRef = useRef<HTMLDivElement>(null);
+  const [leftPx, setLeftPx] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const bar = barRef.current;
+    const parent = bar?.offsetParent as HTMLElement | null;
+    if (!bar || !parent) return;
+    const MARGIN = 12;
+    const compute = () => {
+      if (!barRef.current) return;
+      const el = barRef.current;
+      const paneLeft = parent.getBoundingClientRect().left;
+      const containerW = parent.clientWidth;
+      const barW = el.offsetWidth;
+      const centeredLeft = (containerW - barW) / 2;
+      const maxLeft = containerW - MARGIN - barW; // keep the right edge in view
+      const minLeft = MARGIN - paneLeft;          // don't run off the window's left edge
+      setLeftPx(Math.max(minLeft, Math.min(centeredLeft, maxLeft)));
+    };
+    // ResizeObserver fires once on observe, then on every pane/bar resize.
+    const ro = new ResizeObserver(compute);
+    ro.observe(parent);
+    ro.observe(bar);
+    window.addEventListener('resize', compute);
+    return () => { ro.disconnect(); window.removeEventListener('resize', compute); };
+  }, [selectedTaskIds.length]);
 
   if (selectedTaskIds.length <= 1) return null;
 
@@ -26,8 +62,22 @@ export function BulkActions() {
     await updateMultipleTasks(selectedTaskIds, { completed: true });
   };
 
+  const runDelete = () => {
+    void deleteMultipleTasks(selectedTaskIds);
+    setConfirmOpen(false);
+  };
+
+  const handleDelete = () => {
+    if (confirmDelete) setConfirmOpen(true);
+    else runDelete();
+  };
+
   return (
-    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40">
+    <div
+      ref={barRef}
+      className="absolute bottom-6 z-40"
+      style={leftPx == null ? { left: '50%', transform: 'translateX(-50%)' } : { left: `${leftPx}px` }}
+    >
       <div className="flex items-center gap-2 px-4 py-2.5 bg-[#1A1A1A] dark:bg-[#2A2A2A] rounded-xl shadow-2xl border border-[#333] dark:border-[#444]">
         <span className="text-[13px] text-white font-medium mr-2">
           {selectedTaskIds.length} selected
@@ -88,7 +138,29 @@ export function BulkActions() {
           Complete
         </button>
 
+        {/* Delete button */}
+        <button
+          onClick={handleDelete}
+          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[12px] text-white hover:bg-[#333] dark:hover:bg-[#444] transition-colors"
+        >
+          <svg className="w-4 h-4 text-[#e84545]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2m-1 0v14a1 1 0 01-1 1H8a1 1 0 01-1-1V6h10z" />
+          </svg>
+          Delete
+        </button>
+
         <div className="w-px h-5 bg-[#444]" />
+
+        {/* Select all visible */}
+        <button
+          onClick={() => selectAll()}
+          className="p-1.5 rounded-md text-[#888] hover:text-white hover:bg-[#333] dark:hover:bg-[#444] transition-colors"
+          title="Select all visible (⌘A)"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
+          </svg>
+        </button>
 
         {/* Cancel button */}
         <button
@@ -101,6 +173,13 @@ export function BulkActions() {
           </svg>
         </button>
       </div>
+
+      <ConfirmModal
+        open={confirmOpen}
+        message={`Delete ${selectedTaskIds.length} tasks?`}
+        onConfirm={runDelete}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </div>
   );
 }

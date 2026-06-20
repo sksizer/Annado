@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useTaskStore } from '../stores/taskStore';
 import { usePanelId } from '../contexts/PanelContext';
 import { WhenType, createWhenValue } from '../types/task';
@@ -15,6 +15,34 @@ export function BulkActions() {
   const selectedTaskIds = panelId === 'sidePanel' ? sideIds : mainIds;
   const selectAll = panelId === 'sidePanel' ? sidePanelSelectAllVisible : selectAllVisible;
   const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // Center the bar over the list pane, but once the pane is narrower than the
+  // bar, shift it left so its right edge stays in view instead of being clipped.
+  const barRef = useRef<HTMLDivElement>(null);
+  const [leftPx, setLeftPx] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const bar = barRef.current;
+    const parent = bar?.offsetParent as HTMLElement | null;
+    if (!bar || !parent) return;
+    const MARGIN = 12;
+    const compute = () => {
+      if (!barRef.current) return;
+      const el = barRef.current;
+      const paneLeft = parent.getBoundingClientRect().left;
+      const containerW = parent.clientWidth;
+      const barW = el.offsetWidth;
+      const centeredLeft = (containerW - barW) / 2;
+      const maxLeft = containerW - MARGIN - barW; // keep the right edge in view
+      const minLeft = MARGIN - paneLeft;          // don't run off the window's left edge
+      setLeftPx(Math.max(minLeft, Math.min(centeredLeft, maxLeft)));
+    };
+    // ResizeObserver fires once on observe, then on every pane/bar resize.
+    const ro = new ResizeObserver(compute);
+    ro.observe(parent);
+    ro.observe(bar);
+    window.addEventListener('resize', compute);
+    return () => { ro.disconnect(); window.removeEventListener('resize', compute); };
+  }, [selectedTaskIds.length]);
 
   if (selectedTaskIds.length <= 1) return null;
 
@@ -45,7 +73,11 @@ export function BulkActions() {
   };
 
   return (
-    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40">
+    <div
+      ref={barRef}
+      className="absolute bottom-6 z-40"
+      style={leftPx == null ? { left: '50%', transform: 'translateX(-50%)' } : { left: `${leftPx}px` }}
+    >
       <div className="flex items-center gap-2 px-4 py-2.5 bg-[#1A1A1A] dark:bg-[#2A2A2A] rounded-xl shadow-2xl border border-[#333] dark:border-[#444]">
         <span className="text-[13px] text-white font-medium mr-2">
           {selectedTaskIds.length} selected

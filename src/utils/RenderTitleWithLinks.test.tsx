@@ -5,7 +5,7 @@ import { useTaskStore } from '../stores/taskStore';
 
 vi.mock('@tauri-apps/plugin-opener', () => ({
   // Real openUrl returns Promise<void>; the source calls .catch() on it, so the
-  // mock must resolve a promise (a bare vi.fn() returns undefined → unhandled
+  // mock must resolve a promise (a bare vi.fn() returns undefined → an unhandled
   // ".catch of undefined" rejection that fails the run).
   openUrl: vi.fn().mockResolvedValue(undefined),
 }));

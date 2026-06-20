@@ -9,15 +9,19 @@ tags: []
 need_human_review: true
 impact: medium
 complexity: large
+prs:
+- https://github.com/sksizer/Annado/pull/2
 ---
 # Always-on "Open In" settings: reorderable opener list with custom apps
 
-> NOTE: This task builds on PR #2 (`feat/open-with-open-icon`), which replaced
-> the old configurable "External Editor" setting with auto-detected path
-> openers and **removed** the settings UI. Upstream's intent is to *retain* the
-> settings, so this task re-introduces a single always-on "Open In" settings
-> section backed by the new detection. The `## Today` / `## Files to touch`
-> citations refer to the **`feat/open-with-open-icon` branch**, not `main`.
+> NOTE: This task is **delivered by reworking PR #2** (`feat/open-with-open-icon`,
+> recorded in the `prs:` frontmatter) — not a separate PR. PR #2 replaced the
+> old configurable "External Editor" setting with auto-detected path openers and
+> **removed** the settings UI; this task changes PR #2 so it instead
+> re-introduces a single always-on "Open In" settings section backed by that
+> detection (matching upstream's intent to *retain* the settings). The
+> `## Today` / `## Files to touch` citations refer to the
+> **`feat/open-with-open-icon` branch**, not `main`.
 
 ## Goal
 
@@ -126,10 +130,10 @@ special-casing in the default logic).
 
 ## Dependencies
 
-- PR #2 (`feat/open-with-open-icon`) — this task builds directly on its path-opener mechanism. PR #2 is currently unmerged and conflicted against `main` (19 behind), and the fork's `main` is behind `upstream/main`; the base/rebase strategy must be settled before pickup (rework PR #2 in place vs. a branch stacked on it).
+- **Delivered via PR #2** (`feat/open-with-open-icon`, recorded in `prs:`). This task's implementation lands as additional commits on PR #2's branch — the work changes PR #2 itself (replacing its settings *removal* with the always-on "Open In" section). PR #2 is currently conflicted against `main` (19 behind) and the fork's `main` is behind `upstream/main`; resolving that divergence is part of the work, not a separate prerequisite task.
 
 ## Discovery context
 
 - Design agreed with the user on 2026-06-19: replace PR #2's removal of the editor settings with an always-on "Open In" section that drives the open-in icon/menu and supports remove, reorder, and custom openers. Reconciles with upstream's stated intent to retain the settings.
 - **Open decision — persistence:** `order`/`hidden` preferences fit `localStorage` (like other UI settings); custom openers carry an executable command and are better held in backend config (the removed editor config was backend, and the backend must exec them). Confirm before implementation.
-- **Open decision — base branch:** whether to rework PR #2 in place or stack this on its branch; depends on the fork↔upstream sync strategy (see the branch-assessment summary).
+- **Decided — base branch (2026-06-19):** delivered by reworking PR #2 in place on branch `feat/open-with-open-icon` (recorded in `prs:`); the user confirmed PR #2 itself is being changed. The fork↔upstream divergence (PR #2 conflicted vs `main`) is resolved as part of this work, informed by the fork↔upstream sync strategy (see the branch-assessment summary).

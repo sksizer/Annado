@@ -1,36 +1,43 @@
 import type { ContextMenuItem } from '../components/ContextMenu';
 import {
   openEntityFile,
-  openWith,
-  openTargetFor,
-  openersForPath,
   openLabel,
+  effectiveOpeners,
+  runOpener,
   type PathOpenerInfo,
+  type OpenerPrefs,
 } from './pathOpener';
 
 /**
  * Context-menu items for opening an entity's backing file:
- *   - "Open" / "Open in Obsidian" — the default action (Obsidian if available, else OS default)
- *   - "Open with ▸" — a flyout of every detected app that can open this path
+ *   - "Open" / "Open in <app>" — the default action (first visible+usable opener,
+ *     else OS default)
+ *   - "Open with ▸" — a flyout of every configured (visible + ordered) opener that
+ *     can act on this path, custom openers included
  *
  * Spread the result into any entity's context menu. The "Open with" submenu is
- * omitted when no app can open the path.
+ * omitted when no opener applies to the path.
  */
-export function buildOpenMenuItems(path: string, openers: PathOpenerInfo[]): ContextMenuItem[] {
+export function buildOpenMenuItems(
+  path: string,
+  detected: PathOpenerInfo[],
+  prefs: OpenerPrefs,
+  isObsidianVault: boolean,
+): ContextMenuItem[] {
   const items: ContextMenuItem[] = [
     {
-      label: openLabel(openers, path),
-      onClick: () => void openEntityFile(path, openers).catch(console.error),
+      label: openLabel(path, detected, prefs, isObsidianVault),
+      onClick: () => void openEntityFile(path, detected, prefs, isObsidianVault).catch(console.error),
     },
   ];
 
-  const usable = openersForPath(openers, path);
-  if (usable.length > 0) {
+  const openers = effectiveOpeners(detected, prefs, isObsidianVault, path);
+  if (openers.length > 0) {
     items.push({
       label: 'Open with',
-      submenu: usable.map((o) => ({
+      submenu: openers.map((o) => ({
         label: o.name,
-        onClick: () => void openWith(openTargetFor(path, o.appId), o.appId).catch(console.error),
+        onClick: () => void runOpener(o, path).catch(console.error),
       })),
     });
   }

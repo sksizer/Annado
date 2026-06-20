@@ -26,6 +26,63 @@ pub struct AppConfig {
     // Import marker tag (e.g. "task"). Empty = import every checkbox (default).
     #[serde(default)]
     pub task_marker_tag: String,
+    // "Open In" preferences: per-target order/visibility and any custom openers.
+    #[serde(default)]
+    pub opener_prefs: OpenerPrefs,
+}
+
+/// A user-defined opener that runs an arbitrary command against a path. `command`
+/// is a template with `{file}` / `{dir}` / `{line}` placeholders (see
+/// [`expand_custom_command`]).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomOpener {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub command: String,
+}
+
+/// Persisted "Open In" preferences. `order` is opener ids (detected app ids and
+/// custom opener ids) in display order; `hidden` is the ids the user has hidden
+/// from the open-in affordance; `custom` holds user-defined openers.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenerPrefs {
+    #[serde(default)]
+    pub order: Vec<String>,
+    #[serde(default)]
+    pub hidden: Vec<String>,
+    #[serde(default)]
+    pub custom: Vec<CustomOpener>,
+}
+
+/// Expand a custom-opener command template into argv. Substitutes `{file}` (the
+/// absolute path), `{dir}` (its parent directory), and `{line}` (best-effort —
+/// empty when unknown) into each token, then splits on whitespace.
+///
+/// Splitting is intentionally simple (macOS-first): the template is shell-split
+/// on whitespace *first*, then placeholders are substituted into each token, so
+/// a path containing spaces stays a single argv entry even though we don't honor
+/// quotes. This is unit-tested.
+pub fn expand_custom_command(template: &str, path: &str) -> Vec<String> {
+    let dir = std::path::Path::new(path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    // `{line}` is best-effort: we have no line context here, so it expands to empty.
+    let line = "";
+    template
+        .split_whitespace()
+        .map(|tok| {
+            tok.replace("{file}", path)
+                .replace("{dir}", &dir)
+                .replace("{line}", line)
+        })
+        .filter(|tok| !tok.is_empty())
+        .collect()
 }
 
 fn get_config_path(app: &AppHandle) -> Option<PathBuf> {
@@ -54,6 +111,7 @@ fn load_config(app: &AppHandle) -> AppConfig {
                 excluded_paths: Vec::new(),
                 task_format: String::new(),
                 task_marker_tag: String::new(),
+                opener_prefs: OpenerPrefs::default(),
             };
             // Save migrated config and remove legacy file
             if let Some(config_path) = get_config_path(app) {
@@ -597,6 +655,36 @@ pub fn set_is_obsidian_vault(value: bool, app: AppHandle) -> Result<(), String> 
     Ok(())
 }
 
+// "Open In" preferences (per-target order / visibility / custom openers)
+
+#[tauri::command]
+pub fn get_opener_prefs(app: AppHandle) -> OpenerPrefs {
+    load_config(&app).opener_prefs
+}
+
+#[tauri::command]
+pub fn set_opener_prefs(opener_prefs: OpenerPrefs, app: AppHandle) -> Result<(), String> {
+    let mut config = load_config(&app);
+    config.opener_prefs = opener_prefs;
+    save_config(&app, &config)
+}
+
+/// Run a custom opener's command template against `path`. The template's
+/// `{file}` / `{dir}` / `{line}` placeholders are expanded (see
+/// [`expand_custom_command`]) and the result is spawned as a detached process.
+#[tauri::command]
+pub fn run_custom_opener(path: String, command: String) -> Result<(), String> {
+    let argv = expand_custom_command(&command, &path);
+    let (program, args) = argv
+        .split_first()
+        .ok_or_else(|| "Custom opener command is empty".to_string())?;
+    std::process::Command::new(program)
+        .args(args)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to run custom opener `{}`: {}", program, e))
+}
+
 #[tauri::command]
 pub fn delete_task(id: String) -> Result<(), String> {
     with_vault_result(|vault| vault.delete_task(&id))
@@ -824,6 +912,24 @@ mod tests {
         assert!(body.contains("- [ ] Welcome to Annado"));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn expand_custom_command_substitutes_file_and_dir() {
+        let argv = expand_custom_command("code --goto {file}:{line}", "/Users/me/vault/Note.md");
+        // `{file}` → absolute path, `{line}` → empty (no line context).
+        assert_eq!(argv, vec!["code", "--goto", "/Users/me/vault/Note.md:"]);
+
+        let argv = expand_custom_command("edit {dir}", "/Users/me/vault/Note.md");
+        assert_eq!(argv, vec!["edit", "/Users/me/vault"]);
+
+        // Both placeholders in one template.
+        let argv = expand_custom_command("tool {file} {dir}", "/a/b/c.txt");
+        assert_eq!(argv, vec!["tool", "/a/b/c.txt", "/a/b"]);
+
+        // A path with no parent yields an empty `{dir}` token, which is filtered out.
+        let argv = expand_custom_command("tool {dir}", "Note.md");
+        assert_eq!(argv, vec!["tool"]);
     }
 
     #[test]

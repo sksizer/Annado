@@ -20,6 +20,7 @@ use commands::{
     get_calendars, get_calendar_events, check_calendar_access, open_calendar_at_date,
     delete_calendar_event,
     get_is_obsidian_vault, set_is_obsidian_vault,
+    get_opener_prefs, set_opener_prefs, run_custom_opener,
     show_main_window, open_task_in_main, get_notification_prefs, save_notification_prefs,
     set_tray_enabled, send_test_notification,
 };
@@ -374,6 +375,9 @@ pub fn run() {
             delete_calendar_event,
             get_is_obsidian_vault,
             set_is_obsidian_vault,
+            get_opener_prefs,
+            set_opener_prefs,
+            run_custom_opener,
             show_main_window,
             open_task_in_main,
             get_notification_prefs,

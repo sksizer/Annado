@@ -6,6 +6,8 @@ import { normalizeTagInput } from '../utils/tags';
 import { filledRowClass, inlineActionButtonClass } from '../utils/styles';
 import { ScheduleBreak, DEFAULT_WORK_SCHEDULE } from '../features/agenda/types';
 import { Toggle } from './Toggle';
+import { SortableList, SortableItem } from './Sortable';
+import { settingsTargets } from '../utils/pathOpener';
 import { KeybindingInput, KEYBINDING_DEFAULTS } from './KeybindingInput';
 import { NotificationSettings } from '../features/notifications/NotificationSettings';
 import { AboutSettings } from './AboutSettings';
@@ -54,7 +56,7 @@ type SettingsTab = 'general' | 'calendar' | 'shortcuts' | 'notifications' | 'abo
 
 
 export function SettingsModal({ isOpen, onClose }: SettingsProps) {
-  const { vaultPath, keybindings, setKeybinding, folderPaths, setFolderPaths, theme, setTheme, accentColor, setAccentColor, excludedPaths, addExcludedPath, removeExcludedPath, calendarEnabled, setCalendarEnabled, availableCalendars, enabledCalendarNames, toggleCalendar, checkCalendarAccess, calendarAccessGranted, calendarBlockingDefaults, setCalendarBlocking, workSchedule, setWorkSchedule, sidebarCounts, setSidebarCount, showProjectCounts, setShowProjectCounts, weekStartsOn, setWeekStartsOn, agendaShowWeekends, setAgendaShowWeekends, defaultTaskDuration, setDefaultTaskDuration, confirmDelete, setConfirmDelete, isObsidianVault, setIsObsidianVault, setShowWelcome } = useTaskStore();
+  const { vaultPath, keybindings, setKeybinding, folderPaths, setFolderPaths, theme, setTheme, accentColor, setAccentColor, excludedPaths, addExcludedPath, removeExcludedPath, calendarEnabled, setCalendarEnabled, availableCalendars, enabledCalendarNames, toggleCalendar, checkCalendarAccess, calendarAccessGranted, calendarBlockingDefaults, setCalendarBlocking, workSchedule, setWorkSchedule, sidebarCounts, setSidebarCount, showProjectCounts, setShowProjectCounts, weekStartsOn, setWeekStartsOn, agendaShowWeekends, setAgendaShowWeekends, defaultTaskDuration, setDefaultTaskDuration, confirmDelete, setConfirmDelete, isObsidianVault, setIsObsidianVault, pathOpeners, openerPrefs, refreshPathOpeners, reorderOpeners, setOpenerHidden, addCustomOpener, removeCustomOpener, setShowWelcome } = useTaskStore();
   const [localFolderPaths, setLocalFolderPaths] = useState(folderPaths);
   const [isSavingFolderPaths, setIsSavingFolderPaths] = useState(false);
   const [migrateRecurrenceOpen, setMigrateRecurrenceOpen] = useState(false);
@@ -81,6 +83,31 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
   const [calendarPermissionError, setCalendarPermissionError] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [appVersion, setAppVersion] = useState('0.1.0');
+
+  // "Open In" add-custom form drafts.
+  const [customName, setCustomName] = useState('');
+  const [customCommand, setCustomCommand] = useState('');
+  // All valid Open In targets (detected + custom), in configured order, each with its hidden flag.
+  const openerTargets = settingsTargets(pathOpeners, openerPrefs, isObsidianVault);
+  const addCustom = () => {
+    const name = customName.trim();
+    const command = customCommand.trim();
+    if (!name || !command) return;
+    void addCustomOpener({ name, command });
+    setCustomName('');
+    setCustomCommand('');
+  };
+  // dnd-kit gives us (fromId, toId); translate to the reordered id list for the store.
+  const handleOpenerReorder = (fromId: string, toId: string) => {
+    const ids = openerTargets.map((t) => t.id);
+    const from = ids.indexOf(fromId);
+    const to = ids.indexOf(toId);
+    if (from === -1 || to === -1) return;
+    const next = [...ids];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    void reorderOpeners(next);
+  };
 
   // Real version from tauri.conf.json; the fallback covers non-Tauri contexts
   useEffect(() => {
@@ -274,6 +301,112 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
                       <p className="mt-1.5 text-[11px] text-[#B0B0B0] dark:text-[#555]">Checkboxes must include this tag to be imported.</p>
                     </div>
                   )}
+                </div>
+              </div>
+
+              {/* Open In Section — always shown; configures the open-in icon/menu targets. */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-[10px] font-semibold text-[#B0B0B0] dark:text-[#555] uppercase tracking-wider">
+                    Open In
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => void refreshPathOpeners()}
+                    className={inlineActionButtonClass}
+                  >
+                    Refresh
+                  </button>
+                </div>
+                <p className="text-[11px] text-[#B0B0B0] dark:text-[#555] mb-3">
+                  Choose which apps the open-in button offers and in what order. Drag to reorder; the
+                  first visible target is the default action. Obsidian appears here when the vault is
+                  an Obsidian vault.
+                </p>
+                {openerTargets.length === 0 ? (
+                  <p className="text-[12px] text-[#B0B0B0] dark:text-[#555]">
+                    No openers detected. Add a custom one below.
+                  </p>
+                ) : (
+                  <SortableList ids={openerTargets.map((t) => t.id)} onReorder={handleOpenerReorder}>
+                    <div className="space-y-1.5" data-testid="opener-target-list">
+                      {openerTargets.map((target) => (
+                        <SortableItem key={target.id} id={target.id}>
+                          {({ handleProps }) => (
+                            <div className={`flex items-center gap-2.5 ${filledRowClass}`}>
+                              <span
+                                {...handleProps}
+                                aria-label={`Drag ${target.name}`}
+                                className="cursor-grab text-[#C0C0C0] dark:text-[#555] hover:text-[#999] select-none touch-none"
+                              >
+                                ⠿
+                              </span>
+                              <span className="flex-1 min-w-0 truncate text-[13px] text-[#1A1A1A] dark:text-[#E0E0E0]">
+                                {target.name}
+                                {target.custom && (
+                                  <span className="ml-2 text-[10px] uppercase tracking-wide text-[#B0B0B0] dark:text-[#666]">
+                                    custom
+                                  </span>
+                                )}
+                              </span>
+                              {target.custom && (
+                                <button
+                                  type="button"
+                                  onClick={() => void removeCustomOpener(target.id)}
+                                  aria-label={`Remove ${target.name}`}
+                                  className="text-[12px] text-[#C0C0C0] dark:text-[#555] hover:text-red-500 transition-colors"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                              <Toggle
+                                checked={!target.hidden}
+                                onChange={(visible) => void setOpenerHidden(target.id, !visible)}
+                                title={target.hidden ? 'Hidden — click to show' : 'Visible — click to hide'}
+                              />
+                            </div>
+                          )}
+                        </SortableItem>
+                      ))}
+                    </div>
+                  </SortableList>
+                )}
+
+                {/* Add custom opener */}
+                <div className="mt-3 space-y-2" data-testid="add-custom-opener">
+                  <input
+                    type="text"
+                    value={customName}
+                    onChange={(e) => setCustomName(e.target.value)}
+                    placeholder="Name (e.g. VS Code)"
+                    aria-label="Custom opener name"
+                    className="w-full px-3 py-2 text-[13px] rounded-lg border border-[#E0E0E0] dark:border-[#3A3A3A] bg-white dark:bg-[#2A2A2A] text-[#1A1A1A] dark:text-[#E0E0E0] focus:outline-none focus:border-primary"
+                  />
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={customCommand}
+                      onChange={(e) => setCustomCommand(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') addCustom(); }}
+                      placeholder="Command (e.g. code --goto {file}:{line})"
+                      aria-label="Custom opener command"
+                      className="flex-1 min-w-0 px-3 py-2 text-[13px] rounded-lg border border-[#E0E0E0] dark:border-[#3A3A3A] bg-white dark:bg-[#2A2A2A] text-[#1A1A1A] dark:text-[#E0E0E0] focus:outline-none focus:border-primary"
+                    />
+                    <button
+                      type="button"
+                      onClick={addCustom}
+                      disabled={!customName.trim() || !customCommand.trim()}
+                      className={`${inlineActionButtonClass} disabled:opacity-40 disabled:cursor-not-allowed`}
+                    >
+                      Add custom
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-[#B0B0B0] dark:text-[#555]">
+                    Use <code className="bg-[#F0F0F0] dark:bg-[#333] px-1 rounded">{'{file}'}</code> for the
+                    absolute path, <code className="bg-[#F0F0F0] dark:bg-[#333] px-1 rounded">{'{dir}'}</code> for
+                    its folder, and <code className="bg-[#F0F0F0] dark:bg-[#333] px-1 rounded">{'{line}'}</code> for
+                    the line number.
+                  </p>
                 </div>
               </div>
 

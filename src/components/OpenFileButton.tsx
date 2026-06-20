@@ -18,6 +18,8 @@ export function OpenFileButton({
   className = '',
 }: OpenFileButtonProps) {
   const pathOpeners = useTaskStore((s) => s.pathOpeners);
+  const openerPrefs = useTaskStore((s) => s.openerPrefs);
+  const isObsidianVault = useTaskStore((s) => s.isObsidianVault);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   const iconSize = size === 'md' ? 'w-4 h-4' : 'w-3.5 h-3.5';
@@ -28,10 +30,10 @@ export function OpenFileButton({
     <>
       <button
         type="button"
-        title={openLabel(pathOpeners, path)}
+        title={openLabel(path, pathOpeners, openerPrefs, isObsidianVault)}
         onClick={(e) => {
           e.stopPropagation();
-          void openEntityFile(path, pathOpeners).catch(console.error);
+          void openEntityFile(path, pathOpeners, openerPrefs, isObsidianVault).catch(console.error);
         }}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -53,13 +55,15 @@ export function OpenFileButton({
             d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
           />
         </svg>
-        {showLabel && <span className="text-[11px]">{openLabel(pathOpeners, path)}</span>}
+        {showLabel && (
+          <span className="text-[11px]">{openLabel(path, pathOpeners, openerPrefs, isObsidianVault)}</span>
+        )}
       </button>
       {menu && (
         <ContextMenu
           x={menu.x}
           y={menu.y}
-          items={buildOpenMenuItems(path, pathOpeners)}
+          items={buildOpenMenuItems(path, pathOpeners, openerPrefs, isObsidianVault)}
           onClose={() => setMenu(null)}
         />
       )}

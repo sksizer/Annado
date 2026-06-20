@@ -19,6 +19,63 @@ export interface PathOpenerInfo {
 
 export const OBSIDIAN_APP_ID = 'obsidian';
 
+/**
+ * A user-defined opener that runs an arbitrary command template against a path.
+ * Mirrors the Rust `CustomOpener`. `id` is generated client-side
+ * (`custom-${uuid}`); `command` supports `{file}` / `{dir}` / `{line}`.
+ */
+export interface CustomOpener {
+  id: string;
+  name: string;
+  command: string;
+}
+
+/**
+ * Persisted "Open In" preferences. Mirrors the Rust `OpenerPrefs`.
+ * - `order`: opener ids (detected app ids + custom ids) in display order.
+ * - `hidden`: ids the user has hidden from the open-in affordance.
+ * - `custom`: user-defined openers.
+ */
+export interface OpenerPrefs {
+  order: string[];
+  hidden: string[];
+  custom: CustomOpener[];
+}
+
+export const EMPTY_OPENER_PREFS: OpenerPrefs = { order: [], hidden: [], custom: [] };
+
+/**
+ * One entry the open-in affordance can act on, after applying preferences. A
+ * `detected` opener runs via `openWith`/`openTargetFor`; a `custom` opener runs
+ * its command via `runCustomOpener`.
+ */
+export type EffectiveOpener =
+  | { kind: 'detected'; id: string; name: string; info: PathOpenerInfo }
+  | { kind: 'custom'; id: string; name: string; command: string };
+
+/** A row for the settings list: a target plus whether it's currently hidden. */
+export interface OpenerTarget {
+  id: string;
+  name: string;
+  hidden: boolean;
+  custom: boolean;
+}
+
+/** Read the opener prefs invoke endpoint (backend `AppConfig.opener_prefs`). */
+export function getOpenerPrefs(): Promise<OpenerPrefs> {
+  return invoke<OpenerPrefs>('get_opener_prefs');
+}
+
+/** Persist the opener prefs to the backend `AppConfig`. */
+export function setOpenerPrefs(openerPrefs: OpenerPrefs): Promise<void> {
+  return invoke('set_opener_prefs', { openerPrefs });
+}
+
+/** Run a custom opener's command template (`{file}`/`{dir}`/`{line}`) against `path`. */
+export function runCustomOpener(path: string, command: string): Promise<void> {
+  return invoke('run_custom_opener', { path, command });
+}
+
 /** Available openers on this machine (detection is cached on the Rust side). */
 export function detectOpeners(): Promise<PathOpenerInfo[]> {
   return invoke<PathOpenerInfo[]>('detect_path_openers');
@@ -66,13 +123,99 @@ export function openersForPath(openers: PathOpenerInfo[], path: string): PathOpe
   return openers.filter((o) => accepts(o.fileSupport, ext));
 }
 
+/** Order a list of ids by `order` (listed ids first, in `order`; the rest appended
+ * in their existing relative order). Pure helper for the effective-list sort. */
+function sortByOrder<T>(items: T[], idOf: (item: T) => string, order: string[]): T[] {
+  const rank = new Map(order.map((id, i) => [id, i] as const));
+  return items
+    .map((item, i) => ({ item, i }))
+    .sort((a, b) => {
+      const ra = rank.get(idOf(a.item));
+      const rb = rank.get(idOf(b.item));
+      if (ra !== undefined && rb !== undefined) return ra - rb;
+      if (ra !== undefined) return -1; // listed before unlisted
+      if (rb !== undefined) return 1;
+      return a.i - b.i; // both unlisted: keep existing order (stable)
+    })
+    .map(({ item }) => item);
+}
+
 /**
- * The app to use for the default "Open" action: Obsidian when it's installed
- * and can open this path, otherwise `null` (caller falls back to the OS default).
+ * The configured, ordered, visible openers that can act on `path` — the single
+ * source the open-in icon and "Open with" menu consume. Custom openers are
+ * treated as usable for ANY path (their command decides); detected apps are
+ * filtered by `openersForPath`. Obsidian is dropped unless `isObsidianVault`.
+ * Hidden ids are dropped. The result is sorted by `prefs.order` (ids not listed
+ * are appended in their existing order: custom first, then detected).
  */
-export function defaultOpener(openers: PathOpenerInfo[], path: string): string | null {
-  const usable = openersForPath(openers, path);
-  return usable.some((o) => o.appId === OBSIDIAN_APP_ID) ? OBSIDIAN_APP_ID : null;
+export function effectiveOpeners(
+  detected: PathOpenerInfo[],
+  prefs: OpenerPrefs,
+  isObsidianVault: boolean,
+  path: string,
+): EffectiveOpener[] {
+  const hidden = new Set(prefs.hidden);
+
+  const customEntries: EffectiveOpener[] = prefs.custom
+    .filter((c) => !hidden.has(c.id))
+    .map((c) => ({ kind: 'custom', id: c.id, name: c.name, command: c.command }));
+
+  const usable = openersForPath(detected, path);
+  const detectedEntries: EffectiveOpener[] = usable
+    .filter((o) => isObsidianVault || o.appId !== OBSIDIAN_APP_ID)
+    .filter((o) => !hidden.has(o.appId))
+    .map((o) => ({ kind: 'detected', id: o.appId, name: o.name, info: o }));
+
+  // Custom first, then detected, before applying the user-defined order.
+  const all = [...customEntries, ...detectedEntries];
+  return sortByOrder(all, (e) => e.id, prefs.order);
+}
+
+/**
+ * The default opener for `path`: the first of the effective list, or `null` when
+ * none is visible+usable (caller falls back to the OS default).
+ */
+export function effectiveDefault(
+  detected: PathOpenerInfo[],
+  prefs: OpenerPrefs,
+  isObsidianVault: boolean,
+  path: string,
+): EffectiveOpener | null {
+  return effectiveOpeners(detected, prefs, isObsidianVault, path)[0] ?? null;
+}
+
+/**
+ * All valid Open In targets for the **settings** list — NOT path-filtered, so
+ * every configured target is shown for management. Custom openers plus detected
+ * apps (Obsidian only when `isObsidianVault`), sorted by `prefs.order`, each
+ * carrying its current hidden flag.
+ */
+export function settingsTargets(
+  detected: PathOpenerInfo[],
+  prefs: OpenerPrefs,
+  isObsidianVault: boolean,
+): OpenerTarget[] {
+  const hidden = new Set(prefs.hidden);
+
+  const customTargets: OpenerTarget[] = prefs.custom.map((c) => ({
+    id: c.id,
+    name: c.name,
+    hidden: hidden.has(c.id),
+    custom: true,
+  }));
+
+  const detectedTargets: OpenerTarget[] = detected
+    .filter((o) => isObsidianVault || o.appId !== OBSIDIAN_APP_ID)
+    .map((o) => ({ id: o.appId, name: o.name, hidden: hidden.has(o.appId), custom: false }));
+
+  const all = [...customTargets, ...detectedTargets];
+  return sortByOrder(all, (t) => t.id, prefs.order);
+}
+
+/** Run an effective opener against `path` (detected → `openWith`, custom → its command). */
+export function runOpener(opener: EffectiveOpener, path: string): Promise<void> {
+  if (opener.kind === 'custom') return runCustomOpener(path, opener.command);
+  return openWith(openTargetFor(path, opener.id), opener.id);
 }
 
 /**
@@ -99,13 +242,28 @@ export function openTargetFor(path: string, appId: string): string {
   return extensionOf(path) ? containingDir(path) : path;
 }
 
-/** Open `path` with the default rule: Obsidian if available, else OS default. */
-export function openEntityFile(path: string, openers: PathOpenerInfo[]): Promise<void> {
-  const appId = defaultOpener(openers, path);
-  return appId ? openWith(path, appId) : openDefault(path);
+/**
+ * Open `path` with the configured default: the first visible+usable opener from
+ * the effective list, falling back to the OS default when none exists.
+ */
+export function openEntityFile(
+  path: string,
+  detected: PathOpenerInfo[],
+  prefs: OpenerPrefs,
+  isObsidianVault: boolean,
+): Promise<void> {
+  const opener = effectiveDefault(detected, prefs, isObsidianVault, path);
+  return opener ? runOpener(opener, path) : openDefault(path);
 }
 
 /** Label for the default open action, reflecting where it will open. */
-export function openLabel(openers: PathOpenerInfo[], path: string): string {
-  return defaultOpener(openers, path) === OBSIDIAN_APP_ID ? 'Open in Obsidian' : 'Open';
+export function openLabel(
+  path: string,
+  detected: PathOpenerInfo[],
+  prefs: OpenerPrefs,
+  isObsidianVault: boolean,
+): string {
+  const opener = effectiveDefault(detected, prefs, isObsidianVault, path);
+  if (!opener) return 'Open';
+  return `Open in ${opener.name}`;
 }

@@ -530,7 +530,7 @@ export function ReviewView() {
   const {
     tasks, availableProjects,
     setCurrentView, updateTask, deleteTask, toggleTaskComplete,
-    pathOpeners,
+    pathOpeners, openerPrefs, isObsidianVault,
   } = useTaskStore();
 
   // Wikilink rendering — used for step 4 (Next Week) list
@@ -656,7 +656,7 @@ export function ReviewView() {
       if (e.key === 'o' || e.key === 'O') {
         e.preventDefault();
         const fp = (currentItem as Task).filePath ?? (currentItem as ProjectInfo).path;
-        if (fp) openEntityFile(fp, pathOpeners).catch(console.error);
+        if (fp) openEntityFile(fp, pathOpeners, openerPrefs, isObsidianVault).catch(console.error);
         return;
       }
 
@@ -692,14 +692,14 @@ export function ReviewView() {
         else if (e.key === '4') { deleteTask(task.id); setUndoStack({ id: task.id, title: task.title }); advance(2); }
       } else if (step === 3 && currentQuiet) {
         const proj = currentQuiet;
-        if (e.key === '1') openEntityFile(proj.path, pathOpeners).catch(console.error);
+        if (e.key === '1') openEntityFile(proj.path, pathOpeners, openerPrefs, isObsidianVault).catch(console.error);
         else if (e.key === '2') { dismiss(proj.path); advance(3); }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [step, currentInbox, currentOverdue, currentStalled, currentQuiet, toggleTaskComplete, updateTask, deleteTask, setCurrentView, skippedByStep, pathOpeners]);
+  }, [step, currentInbox, currentOverdue, currentStalled, currentQuiet, toggleTaskComplete, updateTask, deleteTask, setCurrentView, skippedByStep, pathOpeners, openerPrefs, isObsidianVault]);
 
   // Progress bar values for steps 0–3
   const getProgress = (s: number) => {
@@ -836,7 +836,7 @@ export function ReviewView() {
                 {step === 3 && currentQuiet && (
                   <QuietProjectCard
                     project={currentQuiet}
-                    onOpenObsidian={() => { openEntityFile(currentQuiet.path, pathOpeners).catch(console.error); }}
+                    onOpenObsidian={() => { openEntityFile(currentQuiet.path, pathOpeners, openerPrefs, isObsidianVault).catch(console.error); }}
                     onIgnore={() => { dismiss(currentQuiet.path); advance(3); }}
                   />
                 )}

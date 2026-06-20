@@ -4,6 +4,7 @@ import { Task, ProjectInfo } from '../../types/task';
 import { computeReviewData } from './computeReviewData';
 import { WhenDatePicker } from '../../components/WhenDatePicker';
 import { InlineMarkdown } from '../../components/MarkdownNotesRenderer';
+import { FilePathLabel } from '../../components/FilePathLabel';
 import { useWikilinkProps } from '../../hooks/useWikilinkProps';
 import { formatDateForDisplay, formatDateForStorage, getToday } from '../../utils/dates';
 import { OpenFileButton } from '../../components/OpenFileButton';
@@ -118,13 +119,16 @@ function CardLabel({ label, task, projectPath }: {
   const accent = useContext(StepAccentContext);
   const filePath = task?.filePath ?? projectPath;
   return (
-    <div className="flex items-center justify-between mb-3">
+    <div className="flex items-start justify-between mb-3">
       <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: accent }}>
         {label}
       </p>
-      {filePath && (
-        <OpenFileButton path={filePath} showLabel />
-      )}
+      <div className="flex flex-col items-end gap-0.5 min-w-0">
+        {filePath && (
+          <OpenFileButton path={filePath} showLabel />
+        )}
+        {filePath && <FilePathLabel filePath={filePath} className="max-w-[280px]" />}
+      </div>
     </div>
   );
 }

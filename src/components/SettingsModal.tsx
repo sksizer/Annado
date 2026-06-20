@@ -56,7 +56,7 @@ type SettingsTab = 'general' | 'calendar' | 'shortcuts' | 'notifications' | 'abo
 
 
 export function SettingsModal({ isOpen, onClose }: SettingsProps) {
-  const { vaultPath, keybindings, setKeybinding, folderPaths, setFolderPaths, theme, setTheme, accentColor, setAccentColor, excludedPaths, addExcludedPath, removeExcludedPath, calendarEnabled, setCalendarEnabled, availableCalendars, enabledCalendarNames, toggleCalendar, checkCalendarAccess, calendarAccessGranted, calendarBlockingDefaults, setCalendarBlocking, workSchedule, setWorkSchedule, sidebarCounts, setSidebarCount, showProjectCounts, setShowProjectCounts, weekStartsOn, setWeekStartsOn, agendaShowWeekends, setAgendaShowWeekends, defaultTaskDuration, setDefaultTaskDuration, confirmDelete, setConfirmDelete, isObsidianVault, setIsObsidianVault, pathOpeners, openerPrefs, refreshPathOpeners, reorderOpeners, setOpenerHidden, setDefaultOpener, addCustomOpener, removeCustomOpener, setShowWelcome } = useTaskStore();
+  const { vaultPath, keybindings, setKeybinding, folderPaths, setFolderPaths, theme, setTheme, accentColor, setAccentColor, excludedPaths, addExcludedPath, removeExcludedPath, calendarEnabled, setCalendarEnabled, availableCalendars, enabledCalendarNames, toggleCalendar, checkCalendarAccess, calendarAccessGranted, calendarBlockingDefaults, setCalendarBlocking, workSchedule, setWorkSchedule, sidebarCounts, setSidebarCount, showProjectCounts, setShowProjectCounts, weekStartsOn, setWeekStartsOn, agendaShowWeekends, setAgendaShowWeekends, defaultTaskDuration, setDefaultTaskDuration, confirmDelete, setConfirmDelete, showFilePath, setShowFilePath, isObsidianVault, setIsObsidianVault, pathOpeners, openerPrefs, refreshPathOpeners, reorderOpeners, setOpenerHidden, setDefaultOpener, addCustomOpener, removeCustomOpener, setShowWelcome } = useTaskStore();
   const [localFolderPaths, setLocalFolderPaths] = useState(folderPaths);
   const [isSavingFolderPaths, setIsSavingFolderPaths] = useState(false);
   const [migrateRecurrenceOpen, setMigrateRecurrenceOpen] = useState(false);
@@ -508,6 +508,22 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
                       <p className="text-[11px] text-[#AAAAAA] dark:text-[#666]">Show a confirmation dialog when deleting a task</p>
                     </div>
                     <Toggle checked={confirmDelete} onChange={setConfirmDelete} />
+                  </div>
+                </div>
+              </div>
+
+              {/* Affordances Section */}
+              <div>
+                <h3 className="text-[10px] font-semibold text-[#B0B0B0] dark:text-[#555] uppercase tracking-wider mb-3">
+                  Affordances
+                </h3>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between py-1">
+                    <div>
+                      <span className="text-[13px] text-[#1A1A1A] dark:text-[#E0E0E0]">Show file path</span>
+                      <p className="text-[11px] text-[#AAAAAA] dark:text-[#666]">Show each task's source file path as faint, right-aligned text</p>
+                    </div>
+                    <Toggle checked={showFilePath} onChange={setShowFilePath} />
                   </div>
                 </div>
               </div>

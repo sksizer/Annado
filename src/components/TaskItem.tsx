@@ -10,6 +10,7 @@ import { formatWhenDisplay, formatDeadlineCountdown, getDeadlineUrgency, formatD
 import { InlineMarkdown, WikilinkProps } from './MarkdownNotesRenderer';
 import { ExpandedTaskCard } from './ExpandedTaskCard';
 import { OpenFileButton } from './OpenFileButton';
+import { FilePathLabel } from './FilePathLabel';
 
 interface TaskItemProps {
   task: Task;
@@ -345,6 +346,7 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
           )}
           {getDeadlineDisplay()}
           <OpenFileButton path={task.filePath} />
+          <FilePathLabel filePath={task.filePath} className="max-w-[220px]" />
         </div>
       </div>
       {confirmModal}

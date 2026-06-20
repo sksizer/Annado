@@ -16,6 +16,7 @@ import { PrioritySelector } from './PrioritySelector';
 import { DurationPicker } from './DurationPicker';
 import { ChecklistItemRow } from './ChecklistItemRow';
 import { MarkdownNotesRenderer, InlineMarkdown } from './MarkdownNotesRenderer';
+import { FilePathLabel } from './FilePathLabel';
 import { TagEditor } from './TagEditor';
 import { WikilinkSuggestions } from './WikilinkSuggestions';
 import { useWikilinkSuggest, applyWikilink, buildWikilinkKeyHandler } from '../hooks/useWikilinkSuggest';
@@ -310,6 +311,7 @@ export function ExpandedTaskCard({ task, isCollapsing, isSoleSelection }: Expand
             )}
           </div>
         </div>
+        <FilePathLabel filePath={task.filePath} className="flex-shrink-0 mt-1 max-w-[200px]" />
       </div>
 
       {/* Expandable detail section — animates height via CSS grid */}

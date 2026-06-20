@@ -40,9 +40,11 @@ export interface OpenerPrefs {
   order: string[];
   hidden: string[];
   custom: CustomOpener[];
+  /** Explicitly-chosen default opener id; `null` falls back to the first visible+usable opener in `order`. */
+  defaultId: string | null;
 }
 
-export const EMPTY_OPENER_PREFS: OpenerPrefs = { order: [], hidden: [], custom: [] };
+export const EMPTY_OPENER_PREFS: OpenerPrefs = { order: [], hidden: [], custom: [], defaultId: null };
 
 /**
  * One entry the open-in affordance can act on, after applying preferences. A
@@ -181,14 +183,29 @@ export function effectiveDefault(
   isObsidianVault: boolean,
   path: string,
 ): EffectiveOpener | null {
-  return effectiveOpeners(detected, prefs, isObsidianVault, path)[0] ?? null;
+  const list = effectiveOpeners(detected, prefs, isObsidianVault, path);
+  // The explicitly-chosen default wins when it's visible + usable for this path;
+  // otherwise fall back to the first opener in the configured order.
+  if (prefs.defaultId) {
+    const chosen = list.find((e) => e.id === prefs.defaultId);
+    if (chosen) return chosen;
+  }
+  return list[0] ?? null;
 }
 
 /**
- * All valid Open In targets for the **settings** list — NOT path-filtered, so
- * every configured target is shown for management. Custom openers plus detected
- * apps (Obsidian only when `isObsidianVault`), sorted by `prefs.order`, each
- * carrying its current hidden flag.
+ * A representative app entity path. Annado entities are markdown files, so the
+ * settings list only offers detected apps that can open `.md` — matching what
+ * the runtime "Open with" menu would actually present for a task's file.
+ */
+const MARKDOWN_PROBE_PATH = 'entity.md';
+
+/**
+ * Valid Open In targets for the **settings** list. Custom openers (always) plus
+ * the detected apps that can open the app's markdown files (Obsidian only when
+ * `isObsidianVault`), sorted by `prefs.order`, each carrying its hidden flag.
+ * Detected apps that can't open `.md` are omitted — they'd never be offered at
+ * open time, so listing them in settings is just noise.
  */
 export function settingsTargets(
   detected: PathOpenerInfo[],
@@ -204,8 +221,10 @@ export function settingsTargets(
     custom: true,
   }));
 
+  const mdUsable = new Set(openersForPath(detected, MARKDOWN_PROBE_PATH).map((o) => o.appId));
   const detectedTargets: OpenerTarget[] = detected
     .filter((o) => isObsidianVault || o.appId !== OBSIDIAN_APP_ID)
+    .filter((o) => mdUsable.has(o.appId))
     .map((o) => ({ id: o.appId, name: o.name, hidden: hidden.has(o.appId), custom: false }));
 
   const all = [...customTargets, ...detectedTargets];

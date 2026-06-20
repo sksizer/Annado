@@ -57,6 +57,10 @@ pub struct OpenerPrefs {
     pub hidden: Vec<String>,
     #[serde(default)]
     pub custom: Vec<CustomOpener>,
+    /// Explicitly-chosen default opener id; `None` falls back to the first
+    /// visible+usable opener in `order`.
+    #[serde(default)]
+    pub default_id: Option<String>,
 }
 
 /// Expand a custom-opener command template into argv. Substitutes `{file}` (the

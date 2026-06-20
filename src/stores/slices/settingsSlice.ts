@@ -9,6 +9,7 @@ import {
   getOpenerPrefs,
   setOpenerPrefs,
   EMPTY_OPENER_PREFS,
+  OBSIDIAN_APP_ID,
   type PathOpenerInfo,
   type OpenerPrefs,
 } from '../../utils/pathOpener';
@@ -158,6 +159,7 @@ export interface SettingsSlice {
   loadOpenerPrefs: () => Promise<void>;
   reorderOpeners: (ids: string[]) => Promise<void>;
   setOpenerHidden: (id: string, hidden: boolean) => Promise<void>;
+  setDefaultOpener: (id: string | null) => Promise<void>;
   addCustomOpener: (opener: { name: string; command: string }) => Promise<void>;
   removeCustomOpener: (id: string) => Promise<void>;
   fetchTaskFormat: () => Promise<void>;
@@ -235,6 +237,18 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
     try {
       await invoke('set_is_obsidian_vault', { value });
       set({ isObsidianVault: value });
+      // Toggling Obsidian on makes Obsidian the default opener; toggling it off
+      // clears that default (Obsidian is no longer a valid target).
+      const prefs = get().openerPrefs;
+      if (value && prefs.defaultId !== OBSIDIAN_APP_ID) {
+        const openerPrefs = { ...prefs, defaultId: OBSIDIAN_APP_ID };
+        set({ openerPrefs });
+        await setOpenerPrefs(openerPrefs);
+      } else if (!value && prefs.defaultId === OBSIDIAN_APP_ID) {
+        const openerPrefs = { ...prefs, defaultId: null };
+        set({ openerPrefs });
+        await setOpenerPrefs(openerPrefs);
+      }
     } catch (error) {
       storeError(set, error);
     }
@@ -286,6 +300,16 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
       ? (current.hidden.includes(id) ? current.hidden : [...current.hidden, id])
       : current.hidden.filter((h) => h !== id);
     const openerPrefs = { ...current, hidden: nextHidden };
+    set({ openerPrefs });
+    try {
+      await setOpenerPrefs(openerPrefs);
+    } catch (error) {
+      storeError(set, error);
+    }
+  },
+
+  setDefaultOpener: async (id: string | null) => {
+    const openerPrefs = { ...get().openerPrefs, defaultId: id };
     set({ openerPrefs });
     try {
       await setOpenerPrefs(openerPrefs);

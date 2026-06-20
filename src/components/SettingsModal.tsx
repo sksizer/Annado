@@ -56,7 +56,7 @@ type SettingsTab = 'general' | 'calendar' | 'shortcuts' | 'notifications' | 'abo
 
 
 export function SettingsModal({ isOpen, onClose }: SettingsProps) {
-  const { vaultPath, keybindings, setKeybinding, folderPaths, setFolderPaths, theme, setTheme, accentColor, setAccentColor, excludedPaths, addExcludedPath, removeExcludedPath, calendarEnabled, setCalendarEnabled, availableCalendars, enabledCalendarNames, toggleCalendar, checkCalendarAccess, calendarAccessGranted, calendarBlockingDefaults, setCalendarBlocking, workSchedule, setWorkSchedule, sidebarCounts, setSidebarCount, showProjectCounts, setShowProjectCounts, weekStartsOn, setWeekStartsOn, agendaShowWeekends, setAgendaShowWeekends, defaultTaskDuration, setDefaultTaskDuration, confirmDelete, setConfirmDelete, isObsidianVault, setIsObsidianVault, pathOpeners, openerPrefs, refreshPathOpeners, reorderOpeners, setOpenerHidden, addCustomOpener, removeCustomOpener, setShowWelcome } = useTaskStore();
+  const { vaultPath, keybindings, setKeybinding, folderPaths, setFolderPaths, theme, setTheme, accentColor, setAccentColor, excludedPaths, addExcludedPath, removeExcludedPath, calendarEnabled, setCalendarEnabled, availableCalendars, enabledCalendarNames, toggleCalendar, checkCalendarAccess, calendarAccessGranted, calendarBlockingDefaults, setCalendarBlocking, workSchedule, setWorkSchedule, sidebarCounts, setSidebarCount, showProjectCounts, setShowProjectCounts, weekStartsOn, setWeekStartsOn, agendaShowWeekends, setAgendaShowWeekends, defaultTaskDuration, setDefaultTaskDuration, confirmDelete, setConfirmDelete, isObsidianVault, setIsObsidianVault, pathOpeners, openerPrefs, refreshPathOpeners, reorderOpeners, setOpenerHidden, setDefaultOpener, addCustomOpener, removeCustomOpener, setShowWelcome } = useTaskStore();
   const [localFolderPaths, setLocalFolderPaths] = useState(folderPaths);
   const [isSavingFolderPaths, setIsSavingFolderPaths] = useState(false);
   const [migrateRecurrenceOpen, setMigrateRecurrenceOpen] = useState(false);
@@ -323,6 +323,19 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
                   first visible target is the default action. Obsidian appears here when the vault is
                   an Obsidian vault.
                 </p>
+                <div className="flex items-center gap-2 mb-3">
+                  <label className="text-[12px] text-[#666] dark:text-[#999] flex-shrink-0">Default</label>
+                  <select
+                    value={openerPrefs.defaultId ?? ''}
+                    onChange={(e) => void setDefaultOpener(e.target.value || null)}
+                    className="flex-1 px-2 py-1 text-[12px] rounded border border-[#E8E8E8] dark:border-[#3A3A3A] bg-white dark:bg-[#333] text-[#1A1A1A] dark:text-[#E0E0E0] focus:outline-none cursor-pointer"
+                  >
+                    <option value="">Automatic (first in list)</option>
+                    {openerTargets.filter((t) => !t.hidden).map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
                 {openerTargets.length === 0 ? (
                   <p className="text-[12px] text-[#B0B0B0] dark:text-[#555]">
                     No openers detected. Add a custom one below.

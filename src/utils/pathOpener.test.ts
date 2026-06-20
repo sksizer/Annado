@@ -66,20 +66,36 @@ describe('effectiveDefault (AC-4/7)', () => {
     // Only finder, which cannot open a file with an extension.
     expect(effectiveDefault([finder], prefs(), true, MD)).toBeNull();
   });
+
+  it('honors an explicitly chosen default when it is visible + usable', () => {
+    const p = prefs({ defaultId: 'vscode', order: ['obsidian', 'vscode'] });
+    expect(effectiveDefault(detected, p, true, MD)?.id).toBe('vscode');
+  });
+
+  it('falls back to the first opener when the chosen default is hidden or unavailable', () => {
+    const hiddenDefault = prefs({ defaultId: 'vscode', hidden: ['vscode'], order: ['obsidian', 'vscode'] });
+    expect(effectiveDefault(detected, hiddenDefault, true, MD)?.id).toBe('obsidian');
+    expect(effectiveDefault(detected, prefs({ defaultId: 'nope' }), true, MD)?.id).toBe('obsidian');
+  });
 });
 
 describe('settingsTargets (AC-1/2/6)', () => {
-  it('lists every configured target (not path-filtered), Obsidian gated by the toggle, carrying hidden flags', () => {
+  it('lists markdown-capable detected apps + custom; omits apps that cannot open .md', () => {
     const p = prefs({
-      hidden: ['finder'],
       custom: [{ id: 'custom-1', name: 'My Script', command: 'sh {file}' }],
     });
     const onObsidian = settingsTargets(detected, p, true);
-    expect(onObsidian.map((t) => t.id).sort()).toEqual(['custom-1', 'finder', 'obsidian', 'vscode']);
-    expect(onObsidian.find((t) => t.id === 'finder')?.hidden).toBe(true);
+    // finder (not_supported for files) can't open .md → omitted from the settings list.
+    expect(onObsidian.map((t) => t.id).sort()).toEqual(['custom-1', 'obsidian', 'vscode']);
+    expect(onObsidian.find((t) => t.id === 'finder')).toBeUndefined();
     expect(onObsidian.find((t) => t.id === 'custom-1')?.custom).toBe(true);
 
     // Obsidian disappears from the settings list when the vault is not Obsidian.
     expect(settingsTargets(detected, p, false).some((t) => t.id === OBSIDIAN_APP_ID)).toBe(false);
+  });
+
+  it('carries the hidden flag for a visible (markdown-capable) target', () => {
+    const p = prefs({ hidden: ['vscode'] });
+    expect(settingsTargets(detected, p, true).find((t) => t.id === 'vscode')?.hidden).toBe(true);
   });
 });

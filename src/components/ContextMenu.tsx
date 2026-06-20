@@ -145,8 +145,12 @@ export function ContextMenu({ x, y, items, onClose, header, subheader }: Context
   // Portal to <body> so the fixed positioning is viewport-relative even when an
   // ancestor has a CSS transform (e.g. virtualized task rows use translateY, which
   // would otherwise make `position: fixed` resolve against the row, not the screen).
+  // `data-picker-portal` marks this as an in-app overlay so the expanded task
+  // card's click-outside-collapse handler does NOT treat a click in this menu as
+  // an outside click — otherwise selecting an item collapses the card and
+  // unmounts the menu before the click fires.
   return createPortal(
-    <div ref={ref} className={`fixed z-50 ${PANEL_CLASS}`} style={pos}>
+    <div ref={ref} data-picker-portal className={`fixed z-50 ${PANEL_CLASS}`} style={pos}>
       {header && (
         <div className="px-3 pt-1.5 pb-1.5 mb-1 border-b border-[#F0F0F0] dark:border-[#3A3A3A]">
           <div className="text-[13px] font-semibold text-[#1A1A1A] dark:text-[#E0E0E0] truncate">{header}</div>

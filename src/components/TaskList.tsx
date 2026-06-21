@@ -861,7 +861,7 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
     setSelectedProject,
     setSelectedTag,
   } = usePanelState();
-  const { selectedPersonMetadata, isLoading, vaultPath, availableProjects, availablePeople, projectColors, tagColors, updateProjectMetadata, sidePanelOpen, toggleSidePanel, calendarEnabled, calendarEvents, smartLists, selectedSmartListId } = useTaskStore(useShallow((s) => ({ selectedPersonMetadata: s.selectedPersonMetadata, isLoading: s.isLoading, vaultPath: s.vaultPath, availableProjects: s.availableProjects, availablePeople: s.availablePeople, projectColors: s.projectColors, tagColors: s.tagColors, updateProjectMetadata: s.updateProjectMetadata, sidePanelOpen: s.sidePanelOpen, toggleSidePanel: s.toggleSidePanel, calendarEnabled: s.calendarEnabled, calendarEvents: s.calendarEvents, smartLists: s.smartLists, selectedSmartListId: s.selectedSmartListId })));
+  const { selectedPersonMetadata, isLoading, vaultPath, availableProjects, availablePeople, projectColors, tagColors, updateProjectMetadata, sidePanelOpen, toggleSidePanel, calendarEnabled, calendarEvents, smartLists, selectedSmartListId, searchQuery, setSearchQuery } = useTaskStore(useShallow((s) => ({ selectedPersonMetadata: s.selectedPersonMetadata, isLoading: s.isLoading, vaultPath: s.vaultPath, availableProjects: s.availableProjects, availablePeople: s.availablePeople, projectColors: s.projectColors, tagColors: s.tagColors, updateProjectMetadata: s.updateProjectMetadata, sidePanelOpen: s.sidePanelOpen, toggleSidePanel: s.toggleSidePanel, calendarEnabled: s.calendarEnabled, calendarEvents: s.calendarEvents, smartLists: s.smartLists, selectedSmartListId: s.selectedSmartListId, searchQuery: s.searchQuery, setSearchQuery: s.setSearchQuery })));
   // getFilteredTasks() reads tasks and completion-linger from the store via
   // getState(), which is not a subscription. usePanelState no longer re-renders
   // this component on selection/expansion (those are per-row now), so subscribe
@@ -875,7 +875,7 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
   const tasks = useMemo(() => getFilteredTasks(), [
     getFilteredTasks, allTasks, completingTaskIds,
     currentView, selectedProject, selectedPerson, selectedTag,
-    smartLists, selectedSmartListId,
+    smartLists, selectedSmartListId, searchQuery,
   ]);
 
   // Logbook renders incrementally (large histories); reset when leaving the view
@@ -1255,6 +1255,35 @@ export function TaskList({ onOpenRecurringModal }: TaskListProps) {
             </button>
           )}
         </div>
+
+        {/* Inbox quick search */}
+        {currentView === 'inbox' && !selectedProject && !selectedPerson && !selectedTag && (
+          <div className="relative mb-5 max-w-md">
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#AAA] dark:text-[#666] pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.3-4.3" strokeLinecap="round" />
+            </svg>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search…  e.g. file:Inbox/Piano"
+              className="w-full text-[13px] pl-9 pr-8 py-2 rounded-lg bg-[#F5F5F5] dark:bg-[#232323] text-[#1A1A1A] dark:text-[#E8E8E8] placeholder-[#AAA] dark:placeholder-[#666] border border-transparent focus:border-primary focus:outline-none focus:bg-white dark:focus:bg-[#1A1A1A] transition-colors"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                title="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-[#AAA] hover:text-[#666] dark:text-[#666] dark:hover:text-[#AAA] transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Project metadata - editable fields in rounded box */}
         {selectedProject && (

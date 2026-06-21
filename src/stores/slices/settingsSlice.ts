@@ -413,8 +413,12 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
       if (excludedPaths.includes(path)) return;
       const newPaths = [...excludedPaths, path];
       const tasks = await invoke<Task[]>('set_excluded_paths', { excludedPaths: newPaths });
-      await invoke('set_annado_exclude_in_file', { relativePath: path, exclude: true });
+      // Sync UI to the config update (the source of truth for folder exclusion)
+      // before the per-file frontmatter write. That write is best-effort and a
+      // no-op for folders; letting it throw (e.g. a path that doesn't resolve)
+      // must not strand the UI out of sync with the backend — mirror remove.
       set({ tasks, excludedPaths: newPaths });
+      invoke('set_annado_exclude_in_file', { relativePath: path, exclude: true }).catch(() => {});
     } catch (error) {
       storeError(set, error);
     }

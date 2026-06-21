@@ -444,33 +444,35 @@ impl Vault {
     }
 
     /// Check if a file path matches any exclusion entry.
-    /// Handles both file paths (`Shopping List.md`) and folder prefixes (`Lists/`).
+    ///
+    /// Each entry is matched against the vault-relative path after stripping any
+    /// trailing slash, so `Lists/` and `Lists` behave the same:
+    ///   - folder prefix — the path lives under `<entry>/` (whole-segment, so
+    ///     `Archive` never matches a sibling like `ArchivedExtra`);
+    ///   - file match — the path equals `<entry>` or `<entry>.md` (entry typed
+    ///     without the extension), but only when the entry was NOT written as an
+    ///     explicit folder (no trailing slash), so `Archive/` doesn't also match
+    ///     a sibling file `Archive.md`.
     pub fn is_path_excluded(file_path: &Path, vault_root: &Path, excluded_paths: &[String]) -> bool {
+        // Normalize separators so matching is stable regardless of platform.
         let relative = match file_path.strip_prefix(vault_root) {
-            Ok(r) => r.to_string_lossy().to_string(),
+            Ok(r) => r.to_string_lossy().replace('\\', "/"),
             Err(_) => return false,
         };
         for pattern in excluded_paths {
-            if pattern.ends_with('/') {
-                // Folder prefix match
-                if relative.starts_with(pattern) || relative.starts_with(&pattern[..pattern.len() - 1]) {
-                    return true;
-                }
-            } else {
-                // Exact file path match
-                if relative == *pattern {
-                    return true;
-                }
-                // Also match without .md extension
-                let with_md = format!("{}.md", pattern);
-                if relative == with_md {
-                    return true;
-                }
-                // Also match as folder prefix (user may omit trailing '/')
-                let folder_prefix = format!("{}/", pattern);
-                if relative.starts_with(&folder_prefix) {
-                    return true;
-                }
+            let explicit_folder = pattern.ends_with('/');
+            let base = pattern.trim_end_matches('/');
+            if base.is_empty() {
+                continue;
+            }
+            // Anything under the folder `<base>/`.
+            if relative.starts_with(&format!("{}/", base)) {
+                return true;
+            }
+            // The entry as a file (with or without its `.md`), unless it was
+            // explicitly a folder.
+            if !explicit_folder && (relative == base || relative == format!("{}.md", base)) {
+                return true;
             }
         }
         false
@@ -2749,6 +2751,37 @@ mod tests {
         let excluded = vec!["Shopping List".to_string()];
         assert!(Vault::is_path_excluded(Path::new("/v/Shopping List.md"), vault, &excluded));
         assert!(!Vault::is_path_excluded(Path::new("/v/Shopping.md"), vault, &excluded));
+    }
+
+    #[test]
+    fn test_is_path_excluded_trailing_slash_matches_whole_segment_only() {
+        let vault = Path::new("/v");
+        let excluded = vec!["Archive/".to_string()];
+        // Files under the folder are excluded...
+        assert!(Vault::is_path_excluded(Path::new("/v/Archive/note.md"), vault, &excluded));
+        assert!(Vault::is_path_excluded(Path::new("/v/Archive/2024/old.md"), vault, &excluded));
+        // ...but a sibling folder sharing the prefix is NOT (the old bare-prefix bug).
+        assert!(!Vault::is_path_excluded(Path::new("/v/Archived/note.md"), vault, &excluded));
+        assert!(!Vault::is_path_excluded(Path::new("/v/ArchiveExtra/note.md"), vault, &excluded));
+        // ...and a same-named sibling file is NOT excluded by an explicit folder entry.
+        assert!(!Vault::is_path_excluded(Path::new("/v/Archive.md"), vault, &excluded));
+    }
+
+    #[test]
+    fn test_is_path_excluded_multiple_entries_with_spaces() {
+        let vault = Path::new("/v");
+        let excluded = vec![
+            "02. Projects/Archived".to_string(), // folder, no trailing slash, with a space
+            "My Notes/".to_string(),             // folder, trailing slash, with a space
+            "Inbox/Scratch.md".to_string(),      // exact file, nested
+        ];
+        assert!(Vault::is_path_excluded(Path::new("/v/02. Projects/Archived/Old.md"), vault, &excluded));
+        assert!(Vault::is_path_excluded(Path::new("/v/My Notes/today.md"), vault, &excluded));
+        assert!(Vault::is_path_excluded(Path::new("/v/Inbox/Scratch.md"), vault, &excluded));
+        // Each entry is independent; near-misses stay included.
+        assert!(!Vault::is_path_excluded(Path::new("/v/My Notebook/today.md"), vault, &excluded));
+        assert!(!Vault::is_path_excluded(Path::new("/v/Inbox/Keep.md"), vault, &excluded));
+        assert!(!Vault::is_path_excluded(Path::new("/v/02. Projects/Active/Now.md"), vault, &excluded));
     }
 
     #[test]

@@ -8,6 +8,7 @@ import { PRIORITY_CONFIG, resolveTagColor } from '../utils/projectColors';
 import { formatWhenDisplay, formatDeadlineCountdown, getDeadlineUrgency, formatDateForDisplay, getToday } from '../utils/dates';
 import { InlineMarkdown, WikilinkProps } from './MarkdownNotesRenderer';
 import { ExpandedTaskCard } from './ExpandedTaskCard';
+import { FilePathLabel } from './FilePathLabel';
 
 interface TaskItemProps {
   task: Task;
@@ -276,6 +277,7 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
             </span>
           )}
           {getDeadlineDisplay()}
+          <FilePathLabel filePath={task.filePath} className="max-w-[220px]" />
         </div>
       </div>
     </div>

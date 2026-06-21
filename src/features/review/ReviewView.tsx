@@ -4,6 +4,7 @@ import { Task, ProjectInfo, EditorType } from '../../types/task';
 import { computeReviewData } from './computeReviewData';
 import { WhenDatePicker } from '../../components/WhenDatePicker';
 import { InlineMarkdown } from '../../components/MarkdownNotesRenderer';
+import { FilePathLabel } from '../../components/FilePathLabel';
 import { useWikilinkProps } from '../../hooks/useWikilinkProps';
 import { formatDateForDisplay, formatDateForStorage, getToday } from '../../utils/dates';
 import { openInEditor, editorLabel } from '../../utils/openInEditor';
@@ -122,22 +123,25 @@ function CardLabel({ label, task, projectPath, vaultPath, isObsidianVault, edito
   const filePath = task?.filePath ?? projectPath;
   const lineNumber = task?.lineNumber ?? 1;
   return (
-    <div className="flex items-center justify-between mb-3">
+    <div className="flex items-start justify-between mb-3">
       <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: accent }}>
         {label}
       </p>
-      {filePath && vaultPath && (
-        <button
-          onClick={() => openInEditor(vaultPath, filePath, lineNumber, isObsidianVault ?? true, editorType ?? 'system', editorCustomCommand ?? '').catch(console.error)}
-          title={editorLabel(isObsidianVault ?? true, editorType ?? 'system')}
-          className="flex items-center gap-1 text-[11px] text-[#ADADB8] hover:text-primary dark:hover:text-primary-light transition-colors"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-          </svg>
-          {isObsidianVault ? 'Obsidian' : 'Open'}
-        </button>
-      )}
+      <div className="flex flex-col items-end gap-0.5 min-w-0">
+        {filePath && vaultPath && (
+          <button
+            onClick={() => openInEditor(vaultPath, filePath, lineNumber, isObsidianVault ?? true, editorType ?? 'system', editorCustomCommand ?? '').catch(console.error)}
+            title={editorLabel(isObsidianVault ?? true, editorType ?? 'system')}
+            className="flex items-center gap-1 text-[11px] text-[#ADADB8] hover:text-primary dark:hover:text-primary-light transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+            {isObsidianVault ? 'Obsidian' : 'Open'}
+          </button>
+        )}
+        {filePath && <FilePathLabel filePath={filePath} className="max-w-[280px]" />}
+      </div>
     </div>
   );
 }

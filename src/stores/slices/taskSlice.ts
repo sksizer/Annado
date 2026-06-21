@@ -4,6 +4,7 @@ import type { SliceCreator } from './types';
 import { storeError } from '../storeUtils';
 import { _vaultVersion } from './settingsSlice';
 import { filterTasks, filterTasksForSmartList, withCompletionLinger } from '../filterTasks';
+import { parseSearchQuery, matchesSearch } from '../../utils/taskSearch';
 import {
   Task, TaskUpdatePayload, CreateTaskPayload, ViewType,
   ProjectInfo, PersonInfo, PersonMetadata, UpdateProjectMetadataPayload,
@@ -32,6 +33,8 @@ export interface TaskSlice {
   selectedPersonMetadata: PersonMetadata | null;
   selectedTag: string | null;
   currentView: ViewType;
+  /** Inbox quick-search query (currently understands a `file:<path>` token). */
+  searchQuery: string;
   availableProjects: ProjectInfo[];
   availablePeople: PersonInfo[];
   availableTags: TagInfo[];
@@ -48,6 +51,7 @@ export interface TaskSlice {
   openDeadlinePicker: (id: string | null) => void;
   clearSelection: () => void;
   setCurrentView: (view: ViewType) => void;
+  setSearchQuery: (query: string) => void;
   setSelectedProject: (project: string | null) => void;
   setSelectedPerson: (person: string | null) => void;
   setSelectedTag: (tag: string | null) => void;
@@ -146,6 +150,7 @@ export const createTaskSlice: SliceCreator<TaskSlice> = (set, get) => {
   selectedPersonMetadata: null,
   selectedTag: null,
   currentView: 'inbox' as ViewType,
+  searchQuery: '',
   availableProjects: [],
   availablePeople: [],
   availableTags: [],
@@ -260,6 +265,8 @@ export const createTaskSlice: SliceCreator<TaskSlice> = (set, get) => {
   setCurrentView: (view) => {
     set({ currentView: view, selectedTaskId: null, selectedProject: null, selectedPerson: null, selectedTag: null, expandedTaskId: null });
   },
+
+  setSearchQuery: (query) => set({ searchQuery: query }),
 
   setSelectedProject: (project) => {
     set({ selectedProject: project, selectedPerson: null, selectedTag: null, expandedTaskId: null, selectedTaskId: null });
@@ -518,15 +525,26 @@ export const createTaskSlice: SliceCreator<TaskSlice> = (set, get) => {
 
   getFilteredTasks: () => {
     const state = get();
-    const { tasks, completingTaskIds, currentView, selectedProject, selectedPerson, selectedTag, smartLists, selectedSmartListId } = state;
+    const { tasks, completingTaskIds, currentView, selectedProject, selectedPerson, selectedTag, smartLists, selectedSmartListId, searchQuery } = state;
+    let base: Task[];
     if (currentView === 'smart-list') {
       const list = smartLists.find((l) => l.id === selectedSmartListId);
-      if (!list) return [];
-      return withCompletionLinger(tasks, completingTaskIds, (ts) =>
-        filterTasksForSmartList(ts, list.filter, formatDateForStorage(getToday())));
+      base = list
+        ? withCompletionLinger(tasks, completingTaskIds, (ts) =>
+            filterTasksForSmartList(ts, list.filter, formatDateForStorage(getToday())))
+        : [];
+    } else {
+      base = withCompletionLinger(tasks, completingTaskIds, (ts) =>
+        filterTasks(ts, currentView, selectedProject, selectedPerson, selectedTag));
     }
-    return withCompletionLinger(tasks, completingTaskIds, (ts) =>
-      filterTasks(ts, currentView, selectedProject, selectedPerson, selectedTag));
+    // Inbox-only quick search; applies only where the search field is shown so
+    // the query never silently filters other views.
+    const isInboxRoot = currentView === 'inbox' && !selectedProject && !selectedPerson && !selectedTag;
+    if (isInboxRoot) {
+      const parsed = parseSearchQuery(searchQuery);
+      if (parsed.filePath) base = base.filter((t) => matchesSearch(t, parsed));
+    }
+    return base;
   },
 
   getSelectedTask: () => {

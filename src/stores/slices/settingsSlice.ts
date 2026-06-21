@@ -39,10 +39,11 @@ function loadPersistedSettings() {
       theme: rawTheme && ['light', 'dark', 'system'].includes(rawTheme) ? rawTheme : 'system' as ThemePreference,
       keybindings,
       confirmDelete: JSON.parse(localStorage.getItem('confirmDelete') ?? 'true'),
+      showFilePath: JSON.parse(localStorage.getItem('showFilePath') ?? 'false'),
       accentColor: rawAccent && /^#[0-9a-fA-F]{6}$/.test(rawAccent) ? rawAccent : null,
     };
   } catch {
-    return { theme: 'system' as ThemePreference, keybindings: { ...KEYBINDING_DEFAULTS }, confirmDelete: true, accentColor: null };
+    return { theme: 'system' as ThemePreference, keybindings: { ...KEYBINDING_DEFAULTS }, confirmDelete: true, showFilePath: false, accentColor: null };
   }
 }
 
@@ -126,6 +127,8 @@ export interface SettingsSlice {
   accentColor: string | null;
   keybindings: Record<string, string>;
   confirmDelete: boolean;
+  /** Affordances: show each task's source file path as faint, right-aligned text. */
+  showFilePath: boolean;
   /** Transient (not persisted): force the welcome screen even when a vault is set, so it can be
    *  revisited via Settings → Switch vault. */
   showWelcome: boolean;
@@ -157,6 +160,7 @@ export interface SettingsSlice {
   setAccentColor: (color: string | null) => void;
   setKeybinding: (action: string, keys: string) => void;
   setConfirmDelete: (confirm: boolean) => void;
+  setShowFilePath: (show: boolean) => void;
   clearError: () => void;
 }
 
@@ -177,6 +181,7 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
   accentColor: persisted.accentColor,
   keybindings: persisted.keybindings,
   confirmDelete: persisted.confirmDelete,
+  showFilePath: persisted.showFilePath,
   showWelcome: false,
   vaultPathLoaded: false,
 
@@ -338,6 +343,11 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
   setConfirmDelete: (confirm: boolean) => {
     set({ confirmDelete: confirm });
     persist('confirmDelete', confirm);
+  },
+
+  setShowFilePath: (show: boolean) => {
+    set({ showFilePath: show });
+    persist('showFilePath', show);
   },
 
   clearError: () => set({ error: null }),

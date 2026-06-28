@@ -12,6 +12,7 @@ import {
 } from '../../types/task';
 import { formatDateForStorage, getToday } from '../../utils/dates';
 import { flattenToVisibleOrder, rangeBetween } from '../../utils/selection';
+import { sortTasksByDocumentOrder } from '../../utils/taskOrder';
 
 export interface UndoEntry {
   /** Reverts the recorded action (a normal backend write, so it persists) */
@@ -642,7 +643,7 @@ export const createTaskSlice: SliceCreator<TaskSlice> = (set, get) => {
       const parsed = parseSearchQuery(searchQuery);
       if (parsed.filePath) base = base.filter((t) => matchesSearch(t, parsed));
     }
-    return base;
+    return sortTasksByDocumentOrder(base);
   },
 
   getSelectedTask: () => {

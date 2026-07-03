@@ -11,6 +11,7 @@ import {
   MigrationReport, TagInfo,
 } from '../../types/task';
 import { formatDateForStorage, getToday } from '../../utils/dates';
+import { sortTasksByDocumentOrder } from '../../utils/taskOrder';
 
 export interface UndoEntry {
   /** Reverts the recorded action (a normal backend write, so it persists) */
@@ -537,6 +538,7 @@ export const createTaskSlice: SliceCreator<TaskSlice> = (set, get) => {
       base = withCompletionLinger(tasks, completingTaskIds, (ts) =>
         filterTasks(ts, currentView, selectedProject, selectedPerson, selectedTag));
     }
+    base = sortTasksByDocumentOrder(base);
     // Inbox-only quick search; applies only where the search field is shown so
     // the query never silently filters other views.
     const isInboxRoot = currentView === 'inbox' && !selectedProject && !selectedPerson && !selectedTag;

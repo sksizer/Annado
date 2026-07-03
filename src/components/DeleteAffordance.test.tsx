@@ -40,11 +40,11 @@ describe('delete affordances', () => {
     const btn = screen.getByRole('button', { name: 'Delete task' });
     // AC-8: an SVG icon, not an emoji/text glyph.
     expect(btn.querySelector('svg')).not.toBeNull();
-    // AC-1: hidden until the row is hovered (opacity-0 + group-hover reveal),
-    // i.e. not part of the normal layout flow.
+    // AC-1: hidden until the pointer is over the right-edge hover zone; the
+    // click target is only the icon button itself. Always rendered so the
+    // fade never reflows the row.
     expect(btn.className).toContain('opacity-0');
-    expect(btn.className).toContain('group-hover:opacity-100');
-    expect(btn.className).toContain('absolute');
+    expect(btn.className).toContain('group-hover/del:opacity-100');
 
     fireEvent.click(btn);
     expect(deleteTask).toHaveBeenCalledWith('abc123');

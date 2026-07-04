@@ -280,15 +280,18 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
             </span>
           )}
           {getDeadlineDisplay()}
-          <OpenFileButton path={task.filePath} />
           {/*
-            Delete affordance — pinned to the row's right edge, after the other
-            indicators. The wide padded wrapper is the *visibility* hover zone
-            only (clicks there fall through to the row); the click target is
-            just the icon button inside. Always rendered (opacity toggle only)
-            so the fade never reflows the list.
+            Right-edge action cluster — open-in + delete, pinned after the
+            other indicators. The wide padded wrapper is the *visibility* hover
+            zone only (clicks there fall through to the row); the click targets
+            are just the icon buttons inside. Always rendered (opacity toggle
+            only) so the fade never reflows the list.
           */}
-          <div className="group/del flex items-center justify-end flex-shrink-0 pr-2 -mr-2 py-3 -my-3 pl-14 -ml-14">
+          <div className="group/del flex items-center justify-end gap-2 flex-shrink-0 pr-2 -mr-2 py-3 -my-3 pl-14 -ml-14">
+            <OpenFileButton
+              path={task.filePath}
+              className="opacity-0 group-hover/del:opacity-100 transition-opacity duration-150"
+            />
             <button
               type="button"
               aria-label="Delete task"

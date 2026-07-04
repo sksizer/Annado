@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { Task, getWhenType } from '../types/task';
 import { useTaskStore } from '../stores/taskStore';
 import { usePanelState, usePanelTaskState } from '../hooks/usePanelState';
+import { useConfirmableDelete } from '../hooks/useConfirmableDelete';
 import { useWikilinkNames } from '../contexts/WikilinkNamesContext';
 import { PRIORITY_CONFIG, resolveTagColor } from '../utils/projectColors';
 import { formatWhenDisplay, formatDeadlineCountdown, getDeadlineUrgency, formatDateForDisplay, getToday } from '../utils/dates';
@@ -40,6 +41,8 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
     tagColors: s.tagColors,
     isObsidianVault: s.isObsidianVault,
   })));
+
+  const { requestDelete, confirmModal } = useConfirmableDelete(task);
 
   const whenType = getWhenType(task.when);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -209,7 +212,7 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
             <InlineMarkdown
               text={task.title}
               wikilinkProps={titleWikilinkProps}
-              className={`text-[14px] leading-[1.4] ${
+              className={`min-w-0 break-words text-[14px] leading-[1.4] ${
                 task.completed
                   ? 'line-through text-[#A0A0A0] dark:text-[#666]'
                   : 'text-black/85 dark:text-white/85'
@@ -278,8 +281,33 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
           )}
           {getDeadlineDisplay()}
           <FilePathLabel filePath={task.filePath} className="max-w-[220px]" />
+          {/*
+            Delete affordance — pinned to the row's right edge, after the other
+            indicators. The wide padded wrapper is the *visibility* hover zone
+            only (clicks there fall through to the row); the click target is
+            just the icon button inside. Always rendered (opacity toggle only)
+            so the fade never reflows the list.
+          */}
+          <div className="group/del flex items-center justify-end flex-shrink-0 pr-2 -mr-2 py-3 -my-3 pl-14 -ml-14">
+            <button
+              type="button"
+              aria-label="Delete task"
+              title="Delete task"
+              onClick={(e) => {
+                e.stopPropagation();
+                requestDelete();
+              }}
+              className="opacity-0 group-hover/del:opacity-100 transition-opacity duration-150 flex items-center text-[#9A9AA0] hover:text-danger dark:text-[#777] dark:hover:text-danger"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
+      {confirmModal}
     </div>
   );
 }

@@ -83,7 +83,7 @@ export function TaskDetail() {
       <div className="flex items-center justify-between px-4 pt-12 pb-3">
         <h3 className="text-[13px] font-semibold text-[#1A1A1A] dark:text-[#E0E0E0]">Details</h3>
         <div className="flex items-center gap-2">
-          <OpenFileButton path={task.filePath} />
+          <OpenFileButton path={task.filePath} line={task.lineNumber} />
           <button
             onClick={() => selectTask(null)}
             className="text-[#A0A0A0] hover:text-[#666] dark:hover:text-[#888] transition-colors"
@@ -193,7 +193,7 @@ export function TaskDetail() {
         {/* Metadata */}
         <div className="pt-3 mt-auto border-t border-[#E8E8E8] dark:border-[#2A2A2A] space-y-2">
           {vaultPath && (
-            <OpenFileButton path={task.filePath} showLabel />
+            <OpenFileButton path={task.filePath} line={task.lineNumber} showLabel />
           )}
         </div>
       </div>

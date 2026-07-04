@@ -531,7 +531,7 @@ export function ExpandedTaskCard({ task, isCollapsing, isSoleSelection }: Expand
                   </svg>
                   Delete
                 </button>
-                <OpenFileButton path={task.filePath} showLabel />
+                <OpenFileButton path={task.filePath} line={task.lineNumber} showLabel />
               </div>
             </div>
           </div>

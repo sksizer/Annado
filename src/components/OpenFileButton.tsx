@@ -6,6 +6,8 @@ import { openEntityFile, openLabel } from '../utils/pathOpener';
 
 interface OpenFileButtonProps {
   path: string;
+  /** 1-based line to jump to, for entities that live on a specific line (tasks). */
+  line?: number;
   showLabel?: boolean;
   size?: 'sm' | 'md';
   className?: string;
@@ -13,6 +15,7 @@ interface OpenFileButtonProps {
 
 export function OpenFileButton({
   path,
+  line,
   showLabel = false,
   size = 'sm',
   className = '',
@@ -33,7 +36,7 @@ export function OpenFileButton({
         title={openLabel(path, pathOpeners, openerPrefs, isObsidianVault)}
         onClick={(e) => {
           e.stopPropagation();
-          void openEntityFile(path, pathOpeners, openerPrefs, isObsidianVault).catch(console.error);
+          void openEntityFile(path, pathOpeners, openerPrefs, isObsidianVault, line).catch(console.error);
         }}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -63,7 +66,7 @@ export function OpenFileButton({
         <ContextMenu
           x={menu.x}
           y={menu.y}
-          items={buildOpenMenuItems(path, pathOpeners, openerPrefs, isObsidianVault)}
+          items={buildOpenMenuItems(path, pathOpeners, openerPrefs, isObsidianVault, line)}
           onClose={() => setMenu(null)}
         />
       )}

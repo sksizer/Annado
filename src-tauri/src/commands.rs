@@ -71,19 +71,21 @@ pub struct OpenerPrefs {
 /// on whitespace *first*, then placeholders are substituted into each token, so
 /// a path containing spaces stays a single argv entry even though we don't honor
 /// quotes. This is unit-tested.
-pub fn expand_custom_command(template: &str, path: &str) -> Vec<String> {
+pub fn expand_custom_command(template: &str, path: &str, line: Option<usize>) -> Vec<String> {
     let dir = std::path::Path::new(path)
         .parent()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
-    // `{line}` is best-effort: we have no line context here, so it expands to empty.
-    let line = "";
+    // `{line}` expands to empty when the caller has no line context (e.g. an
+    // entity file rather than a task), so a `{file}:{line}` template degrades
+    // to `{file}:` which editors accept.
+    let line = line.map(|l| l.to_string()).unwrap_or_default();
     template
         .split_whitespace()
         .map(|tok| {
             tok.replace("{file}", path)
                 .replace("{dir}", &dir)
-                .replace("{line}", line)
+                .replace("{line}", &line)
         })
         .filter(|tok| !tok.is_empty())
         .collect()
@@ -704,8 +706,8 @@ pub fn resolve_program(program: &str) -> String {
 /// `{file}` / `{dir}` / `{line}` placeholders are expanded (see
 /// [`expand_custom_command`]) and the result is spawned as a detached process.
 #[tauri::command]
-pub fn run_custom_opener(path: String, command: String) -> Result<(), String> {
-    let argv = expand_custom_command(&command, &path);
+pub fn run_custom_opener(path: String, command: String, line: Option<usize>) -> Result<(), String> {
+    let argv = expand_custom_command(&command, &path, line);
     let (program, args) = argv
         .split_first()
         .ok_or_else(|| "Custom opener command is empty".to_string())?;
@@ -977,20 +979,24 @@ mod tests {
     }
 
     #[test]
-    fn expand_custom_command_substitutes_file_and_dir() {
-        let argv = expand_custom_command("code --goto {file}:{line}", "/Users/me/vault/Note.md");
-        // `{file}` → absolute path, `{line}` → empty (no line context).
+    fn expand_custom_command_substitutes_file_dir_and_line() {
+        // With a line, `{line}` expands to the number.
+        let argv = expand_custom_command("code --goto {file}:{line}", "/Users/me/vault/Note.md", Some(12));
+        assert_eq!(argv, vec!["code", "--goto", "/Users/me/vault/Note.md:12"]);
+
+        // Without line context, `{line}` degrades to empty.
+        let argv = expand_custom_command("code --goto {file}:{line}", "/Users/me/vault/Note.md", None);
         assert_eq!(argv, vec!["code", "--goto", "/Users/me/vault/Note.md:"]);
 
-        let argv = expand_custom_command("edit {dir}", "/Users/me/vault/Note.md");
+        let argv = expand_custom_command("edit {dir}", "/Users/me/vault/Note.md", None);
         assert_eq!(argv, vec!["edit", "/Users/me/vault"]);
 
         // Both placeholders in one template.
-        let argv = expand_custom_command("tool {file} {dir}", "/a/b/c.txt");
+        let argv = expand_custom_command("tool {file} {dir}", "/a/b/c.txt", None);
         assert_eq!(argv, vec!["tool", "/a/b/c.txt", "/a/b"]);
 
         // A path with no parent yields an empty `{dir}` token, which is filtered out.
-        let argv = expand_custom_command("tool {dir}", "Note.md");
+        let argv = expand_custom_command("tool {dir}", "Note.md", None);
         assert_eq!(argv, vec!["tool"]);
     }
 

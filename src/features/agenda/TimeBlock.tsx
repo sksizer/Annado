@@ -420,7 +420,7 @@ export function TimeBlock({ block, columnOffset = 0, columnWidth = '100%', overl
             </button>
           )}
           {isTask && block.task?.filePath && (
-            <OpenFileButton path={block.task.filePath} size="sm" />
+            <OpenFileButton path={block.task.filePath} line={block.task.lineNumber} size="sm" />
           )}
         </div>
         {height >= 30 && (

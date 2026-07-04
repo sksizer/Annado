@@ -74,8 +74,8 @@ export function setOpenerPrefs(openerPrefs: OpenerPrefs): Promise<void> {
 }
 
 /** Run a custom opener's command template (`{file}`/`{dir}`/`{line}`) against `path`. */
-export function runCustomOpener(path: string, command: string): Promise<void> {
-  return invoke('run_custom_opener', { path, command });
+export function runCustomOpener(path: string, command: string, line?: number): Promise<void> {
+  return invoke('run_custom_opener', { path, command, line: line ?? null });
 }
 
 /** Available openers on this machine (detection is cached on the Rust side). */
@@ -88,9 +88,10 @@ export function refreshOpeners(): Promise<PathOpenerInfo[]> {
   return invoke<PathOpenerInfo[]>('refresh_path_openers');
 }
 
-/** Open `path` with a specific detected app (handles Obsidian's URI scheme internally). */
-export function openWith(path: string, appId: string): Promise<void> {
-  return invoke('open_path_with', { path, appId });
+/** Open `path` with a specific detected app (handles Obsidian's URI scheme
+ * internally); editors with a goto syntax open at `line` when given. */
+export function openWith(path: string, appId: string, line?: number): Promise<void> {
+  return invoke('open_path_with', { path, appId, line: line ?? null });
 }
 
 /** Open `path` with the OS default handler (the "double-click" behavior). */
@@ -273,10 +274,11 @@ function reportingFailure(run: Promise<void>): Promise<void> {
   });
 }
 
-/** Run an effective opener against `path` (detected → `openWith`, custom → its command). */
-export function runOpener(opener: EffectiveOpener, path: string): Promise<void> {
-  if (opener.kind === 'custom') return reportingFailure(runCustomOpener(path, opener.command));
-  return reportingFailure(openWith(openTargetFor(path, opener.id), opener.id));
+/** Run an effective opener against `path` (detected → `openWith`, custom → its
+ * command), jumping to `line` where the opener supports it. */
+export function runOpener(opener: EffectiveOpener, path: string, line?: number): Promise<void> {
+  if (opener.kind === 'custom') return reportingFailure(runCustomOpener(path, opener.command, line));
+  return reportingFailure(openWith(openTargetFor(path, opener.id), opener.id, line));
 }
 
 /**
@@ -312,9 +314,10 @@ export function openEntityFile(
   detected: PathOpenerInfo[],
   prefs: OpenerPrefs,
   isObsidianVault: boolean,
+  line?: number,
 ): Promise<void> {
   const opener = effectiveDefault(detected, prefs, isObsidianVault, path);
-  return opener ? runOpener(opener, path) : reportingFailure(openDefault(path));
+  return opener ? runOpener(opener, path, line) : reportingFailure(openDefault(path));
 }
 
 /** Label for the default open action, reflecting where it will open. */

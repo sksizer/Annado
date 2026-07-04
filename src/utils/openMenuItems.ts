@@ -23,11 +23,12 @@ export function buildOpenMenuItems(
   detected: PathOpenerInfo[],
   prefs: OpenerPrefs,
   isObsidianVault: boolean,
+  line?: number,
 ): ContextMenuItem[] {
   const items: ContextMenuItem[] = [
     {
       label: openLabel(path, detected, prefs, isObsidianVault),
-      onClick: () => void openEntityFile(path, detected, prefs, isObsidianVault).catch(console.error),
+      onClick: () => void openEntityFile(path, detected, prefs, isObsidianVault, line).catch(console.error),
     },
   ];
 
@@ -37,7 +38,7 @@ export function buildOpenMenuItems(
       label: 'Open with',
       submenu: openers.map((o) => ({
         label: o.name,
-        onClick: () => void runOpener(o, path).catch(console.error),
+        onClick: () => void runOpener(o, path, line).catch(console.error),
       })),
     });
   }

@@ -497,7 +497,7 @@ function RecurringTaskItem({
             Next: {formatDate(nextDate)}
           </span>
         )}
-        <OpenFileButton path={task.filePath} />
+        <OpenFileButton path={task.filePath} line={task.lineNumber} />
       </div>
     </div>
   );

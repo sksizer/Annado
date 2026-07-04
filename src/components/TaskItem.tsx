@@ -290,6 +290,7 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
           <div className="group/del flex items-center justify-end gap-2 flex-shrink-0 pr-2 -mr-2 py-3 -my-3 pl-14 -ml-14">
             <OpenFileButton
               path={task.filePath}
+              line={task.lineNumber}
               className="opacity-0 group-hover/del:opacity-100 transition-opacity duration-150"
             />
             <button

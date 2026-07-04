@@ -66,12 +66,31 @@ pub fn refresh_path_openers() -> Vec<OpenerInfo> {
 
 /// Open `path` with a specific detected app (`app_id` from [`detect_path_openers`]).
 ///
-/// Honors per-app launch quirks — notably Obsidian's `obsidian://` URI scheme
-/// and vault lookup, which the crate handles internally.
+/// Honors per-app launch quirks — notably Obsidian's `obsidian://` URI scheme —
+/// via the crate. On macOS the registry may detect an app by its .app bundle yet
+/// launch it via a CLI shim (`subl`, `code`, …) that was never symlinked onto
+/// PATH; when that spawn fails we fall back to `open -a <App Name> <path>`,
+/// which launches the bundle directly.
 #[tauri::command]
 pub fn open_path_with(path: String, app_id: String) -> Result<(), String> {
-    path_opener::open(Path::new(&path), &app_id)
-        .map_err(|e| format!("Failed to open {path} with {app_id}: {e}"))
+    let primary = match path_opener::open(Path::new(&path), &app_id) {
+        Ok(()) => return Ok(()),
+        Err(e) => e,
+    };
+
+    #[cfg(target_os = "macos")]
+    if let Some(name) = available_infos().into_iter().find(|o| o.app_id == app_id).map(|o| o.name) {
+        let opened = std::process::Command::new("open")
+            .args(["-a", &name, &path])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if opened {
+            return Ok(());
+        }
+    }
+
+    Err(format!("Failed to open {path} with {app_id}: {primary}"))
 }
 
 /// Open `path` with the OS default handler (the "double-click" behavior).

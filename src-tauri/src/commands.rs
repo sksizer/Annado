@@ -673,6 +673,33 @@ pub fn set_opener_prefs(opener_prefs: OpenerPrefs, app: AppHandle) -> Result<(),
     save_config(&app, &config)
 }
 
+/// Resolve a bare program name to an absolute path by searching PATH, the
+/// common Homebrew/local bin dirs, and well-known macOS app-bundle CLI dirs.
+/// A GUI app on macOS inherits a minimal PATH (`/usr/bin:/bin:...`) that
+/// misses Homebrew installs, and editor CLIs like `subl` often only exist
+/// inside their app bundle without any symlink — both would otherwise fail
+/// with "No such file or directory". A name that can't be found is returned
+/// as-is so spawn produces the real error.
+pub fn resolve_program(program: &str) -> String {
+    if program.contains('/') {
+        return program.to_string();
+    }
+    let base = std::env::var("PATH").unwrap_or_default();
+    let dirs = base.split(':').chain([
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/Applications/Sublime Text.app/Contents/SharedSupport/bin",
+        "/Applications/Visual Studio Code.app/Contents/Resources/app/bin",
+    ]);
+    for dir in dirs.filter(|d| !d.is_empty()) {
+        let candidate = std::path::Path::new(dir).join(program);
+        if candidate.is_file() {
+            return candidate.to_string_lossy().into_owned();
+        }
+    }
+    program.to_string()
+}
+
 /// Run a custom opener's command template against `path`. The template's
 /// `{file}` / `{dir}` / `{line}` placeholders are expanded (see
 /// [`expand_custom_command`]) and the result is spawned as a detached process.
@@ -682,7 +709,7 @@ pub fn run_custom_opener(path: String, command: String) -> Result<(), String> {
     let (program, args) = argv
         .split_first()
         .ok_or_else(|| "Custom opener command is empty".to_string())?;
-    std::process::Command::new(program)
+    std::process::Command::new(resolve_program(program))
         .args(args)
         .spawn()
         .map(|_| ())
@@ -932,6 +959,21 @@ mod tests {
         assert!(body.contains("- [ ] Welcome to Annado"));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_program_finds_path_binaries_and_passes_through_the_rest() {
+        // A binary that exists on every Unix PATH resolves to an absolute path.
+        let sh = resolve_program("sh");
+        assert!(sh.starts_with('/'), "expected absolute path, got {sh}");
+        assert!(std::path::Path::new(&sh).is_file());
+
+        // Anything already containing a slash is passed through untouched.
+        assert_eq!(resolve_program("/usr/bin/env"), "/usr/bin/env");
+        assert_eq!(resolve_program("./local-tool"), "./local-tool");
+
+        // Unknown names fall through unchanged so spawn reports the real error.
+        assert_eq!(resolve_program("annado-no-such-tool"), "annado-no-such-tool");
     }
 
     #[test]

@@ -55,11 +55,42 @@ describe('effectiveOpeners (AC-2/3/4/6/7)', () => {
     });
     expect(ids(effectiveOpeners(detected, p, true, MD))).toEqual(['obsidian', 'custom-1', 'vscode']);
   });
+
+  it('promotes Obsidian to the front in an Obsidian vault when the user has not ordered it', () => {
+    // Without an explicit order, custom entries normally come first — Obsidian
+    // still wins in an Obsidian vault.
+    const p = prefs({ custom: [{ id: 'custom-1', name: 'My Script', command: 'sh {file}' }] });
+    expect(ids(effectiveOpeners(detected, p, true, MD))).toEqual(['obsidian', 'custom-1', 'vscode']);
+  });
+
+  it('does not promote Obsidian once the user positioned it in prefs.order', () => {
+    const p = prefs({ order: ['vscode', 'obsidian'] });
+    expect(ids(effectiveOpeners(detected, p, true, MD))).toEqual(['vscode', 'obsidian']);
+  });
+});
+
+describe('Obsidian as automatic default in Obsidian vaults', () => {
+  it('effectiveDefault picks Obsidian when no explicit default is set', () => {
+    const p = prefs({ custom: [{ id: 'custom-1', name: 'My Script', command: 'sh {file}' }] });
+    expect(effectiveDefault(detected, p, true, MD)?.id).toBe(OBSIDIAN_APP_ID);
+  });
+
+  it('an explicit defaultId still beats the Obsidian promotion', () => {
+    const p = prefs({ defaultId: 'vscode' });
+    expect(effectiveDefault(detected, p, true, MD)?.id).toBe('vscode');
+  });
+
+  it('settingsTargets lists Obsidian first in an Obsidian vault', () => {
+    const p = prefs({ custom: [{ id: 'custom-1', name: 'My Script', command: 'sh {file}' }] });
+    expect(ids(settingsTargets(detected, p, true))[0]).toBe(OBSIDIAN_APP_ID);
+  });
 });
 
 describe('effectiveDefault (AC-4/7)', () => {
   it('is the first effective opener', () => {
-    expect(effectiveDefault(detected, prefs({ order: ['vscode'] }), true, MD)?.id).toBe('vscode');
+    // The settings list writes the full id list on reorder, so a user-chosen
+    // order always positions Obsidian too (which disables its promotion).
+    expect(effectiveDefault(detected, prefs({ order: ['vscode', 'obsidian'] }), true, MD)?.id).toBe('vscode');
   });
 
   it('is null when no usable+visible opener exists (caller falls back to OS default)', () => {

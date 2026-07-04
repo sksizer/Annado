@@ -143,12 +143,33 @@ function sortByOrder<T>(items: T[], idOf: (item: T) => string, order: string[]):
 }
 
 /**
+ * In an Obsidian vault, Obsidian leads by default: it moves to the front of the
+ * list — and therefore becomes the automatic default action — unless the user
+ * has explicitly positioned it themselves (i.e. it appears in `prefs.order`).
+ */
+function promoteObsidianFirst<T>(
+  items: T[],
+  idOf: (item: T) => string,
+  prefs: OpenerPrefs,
+  isObsidianVault: boolean,
+): T[] {
+  if (!isObsidianVault || prefs.order.includes(OBSIDIAN_APP_ID)) return items;
+  const i = items.findIndex((item) => idOf(item) === OBSIDIAN_APP_ID);
+  if (i <= 0) return items;
+  const copy = [...items];
+  const [obsidian] = copy.splice(i, 1);
+  copy.unshift(obsidian);
+  return copy;
+}
+
+/**
  * The configured, ordered, visible openers that can act on `path` — the single
  * source the open-in icon and "Open with" menu consume. Custom openers are
  * treated as usable for ANY path (their command decides); detected apps are
  * filtered by `openersForPath`. Obsidian is dropped unless `isObsidianVault`.
  * Hidden ids are dropped. The result is sorted by `prefs.order` (ids not listed
- * are appended in their existing order: custom first, then detected).
+ * are appended in their existing order: custom first, then detected), with
+ * Obsidian promoted to the front in Obsidian vaults.
  */
 export function effectiveOpeners(
   detected: PathOpenerInfo[],
@@ -170,7 +191,8 @@ export function effectiveOpeners(
 
   // Custom first, then detected, before applying the user-defined order.
   const all = [...customEntries, ...detectedEntries];
-  return sortByOrder(all, (e) => e.id, prefs.order);
+  const sorted = sortByOrder(all, (e) => e.id, prefs.order);
+  return promoteObsidianFirst(sorted, (e) => e.id, prefs, isObsidianVault);
 }
 
 /**
@@ -228,13 +250,33 @@ export function settingsTargets(
     .map((o) => ({ id: o.appId, name: o.name, hidden: hidden.has(o.appId), custom: false }));
 
   const all = [...customTargets, ...detectedTargets];
-  return sortByOrder(all, (t) => t.id, prefs.order);
+  const sorted = sortByOrder(all, (t) => t.id, prefs.order);
+  return promoteObsidianFirst(sorted, (t) => t.id, prefs, isObsidianVault);
+}
+
+/**
+ * Opener failures happen outside any store action, so callers can't easily
+ * surface them; route them through a sink the app registers once (the error
+ * toast). Defaults to console for tests. The error is re-thrown so existing
+ * caller-side `.catch`es keep working.
+ */
+let reportOpenerError: (message: string) => void = (message) => console.error(message);
+
+export function setOpenerErrorReporter(report: (message: string) => void): void {
+  reportOpenerError = report;
+}
+
+function reportingFailure(run: Promise<void>): Promise<void> {
+  return run.catch((e) => {
+    reportOpenerError(String(e));
+    throw e;
+  });
 }
 
 /** Run an effective opener against `path` (detected → `openWith`, custom → its command). */
 export function runOpener(opener: EffectiveOpener, path: string): Promise<void> {
-  if (opener.kind === 'custom') return runCustomOpener(path, opener.command);
-  return openWith(openTargetFor(path, opener.id), opener.id);
+  if (opener.kind === 'custom') return reportingFailure(runCustomOpener(path, opener.command));
+  return reportingFailure(openWith(openTargetFor(path, opener.id), opener.id));
 }
 
 /**
@@ -272,7 +314,7 @@ export function openEntityFile(
   isObsidianVault: boolean,
 ): Promise<void> {
   const opener = effectiveDefault(detected, prefs, isObsidianVault, path);
-  return opener ? runOpener(opener, path) : openDefault(path);
+  return opener ? runOpener(opener, path) : reportingFailure(openDefault(path));
 }
 
 /** Label for the default open action, reflecting where it will open. */

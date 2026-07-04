@@ -84,7 +84,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [appVersion, setAppVersion] = useState('0.1.0');
 
-  // "Open In" add-custom form drafts.
+  // "Open In" add-custom form drafts. The form stays collapsed behind a button.
+  const [showCustomForm, setShowCustomForm] = useState(false);
   const [customName, setCustomName] = useState('');
   const [customCommand, setCustomCommand] = useState('');
   // All valid Open In targets (detected + custom), in configured order, each with its hidden flag.
@@ -320,8 +321,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
                 </div>
                 <p className="text-[11px] text-[#B0B0B0] dark:text-[#555] mb-3">
                   Choose which apps the open-in button offers and in what order. Drag to reorder; the
-                  first visible target is the default action. Obsidian appears here when the vault is
-                  an Obsidian vault.
+                  first visible target is the default action, and right-clicking the open-in icon
+                  lets you pick any of the other visible apps. Obsidian appears here when the vault
+                  is an Obsidian vault.
                 </p>
                 <div className="flex items-center gap-2 mb-3">
                   <label className="text-[12px] text-[#666] dark:text-[#999] flex-shrink-0">Default</label>
@@ -385,41 +387,65 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
                   </SortableList>
                 )}
 
-                {/* Add custom opener */}
-                <div className="mt-3 space-y-2" data-testid="add-custom-opener">
-                  <input
-                    type="text"
-                    value={customName}
-                    onChange={(e) => setCustomName(e.target.value)}
-                    placeholder="Name (e.g. VS Code)"
-                    aria-label="Custom opener name"
-                    className="w-full px-3 py-2 text-[13px] rounded-lg border border-[#E0E0E0] dark:border-[#3A3A3A] bg-white dark:bg-[#2A2A2A] text-[#1A1A1A] dark:text-[#E0E0E0] focus:outline-none focus:border-primary"
-                  />
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={customCommand}
-                      onChange={(e) => setCustomCommand(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') addCustom(); }}
-                      placeholder="Command (e.g. code --goto {file}:{line})"
-                      aria-label="Custom opener command"
-                      className="flex-1 min-w-0 px-3 py-2 text-[13px] rounded-lg border border-[#E0E0E0] dark:border-[#3A3A3A] bg-white dark:bg-[#2A2A2A] text-[#1A1A1A] dark:text-[#E0E0E0] focus:outline-none focus:border-primary"
-                    />
+                {/* Add custom opener — collapsed behind a button; the form itself
+                    only appears on demand so the section stays quiet. */}
+                <div className="mt-3" data-testid="add-custom-opener">
+                  {!showCustomForm ? (
                     <button
                       type="button"
-                      onClick={addCustom}
-                      disabled={!customName.trim() || !customCommand.trim()}
-                      className={`${inlineActionButtonClass} disabled:opacity-40 disabled:cursor-not-allowed`}
+                      onClick={() => setShowCustomForm(true)}
+                      className={inlineActionButtonClass}
                     >
-                      Add custom
+                      Add custom app…
                     </button>
-                  </div>
-                  <p className="text-[11px] text-[#B0B0B0] dark:text-[#555]">
-                    Use <code className="bg-[#F0F0F0] dark:bg-[#333] px-1 rounded">{'{file}'}</code> for the
-                    absolute path, <code className="bg-[#F0F0F0] dark:bg-[#333] px-1 rounded">{'{dir}'}</code> for
-                    its folder, and <code className="bg-[#F0F0F0] dark:bg-[#333] px-1 rounded">{'{line}'}</code> for
-                    the line number.
-                  </p>
+                  ) : (
+                    <div className={`space-y-2 ${filledRowClass}`}>
+                      <input
+                        type="text"
+                        value={customName}
+                        onChange={(e) => setCustomName(e.target.value)}
+                        placeholder="Name (e.g. VS Code)"
+                        aria-label="Custom opener name"
+                        autoFocus
+                        className="w-full px-2 py-1 text-[12px] rounded border border-[#E8E8E8] dark:border-[#3A3A3A] bg-white dark:bg-[#333] text-[#1A1A1A] dark:text-[#E0E0E0] focus:outline-none focus:border-primary"
+                      />
+                      <input
+                        type="text"
+                        value={customCommand}
+                        onChange={(e) => setCustomCommand(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { addCustom(); setShowCustomForm(false); }
+                          if (e.key === 'Escape') setShowCustomForm(false);
+                        }}
+                        placeholder="Command (e.g. code --goto {file}:{line})"
+                        aria-label="Custom opener command"
+                        className="w-full px-2 py-1 text-[12px] rounded border border-[#E8E8E8] dark:border-[#3A3A3A] bg-white dark:bg-[#333] text-[#1A1A1A] dark:text-[#E0E0E0] focus:outline-none focus:border-primary"
+                      />
+                      <p className="text-[11px] text-[#B0B0B0] dark:text-[#555]">
+                        Use <code className="bg-[#F0F0F0] dark:bg-[#333] px-1 rounded">{'{file}'}</code> for the
+                        absolute path, <code className="bg-[#F0F0F0] dark:bg-[#333] px-1 rounded">{'{dir}'}</code> for
+                        its folder, and <code className="bg-[#F0F0F0] dark:bg-[#333] px-1 rounded">{'{line}'}</code> for
+                        the line number.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => { addCustom(); setShowCustomForm(false); }}
+                          disabled={!customName.trim() || !customCommand.trim()}
+                          className={`${inlineActionButtonClass} disabled:opacity-40 disabled:cursor-not-allowed`}
+                        >
+                          Add
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowCustomForm(false)}
+                          className={inlineActionButtonClass}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 

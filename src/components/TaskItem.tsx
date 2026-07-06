@@ -240,6 +240,24 @@ function CollapsedTaskRow({ task, showProject, isSelected, isSoleSelection, isLi
                 </button>
               );
             })}
+            {!task.completed && task.inheritedTags.map((tag) => {
+              // Same color resolution as own tags; the dashed border says "inherited".
+              const customColor = resolveTagColor(tag, tagColors);
+              return (
+                <button
+                  key={`inherited-${tag}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedTag(tag);
+                  }}
+                  title="Inherited from the note's frontmatter"
+                  className="inline-flex items-center text-[11px] px-2 py-[1px] rounded-full border border-dashed border-[#D0D0D5] dark:border-[#555] bg-transparent text-[#B0B0B5] dark:text-[#777] hover:bg-[#F0F0F0] dark:hover:bg-[#3A3A3A] transition-colors flex-shrink-0"
+                  style={customColor ? { color: `${customColor}CC`, borderColor: `${customColor}73` } : undefined}
+                >
+                  {tag}
+                </button>
+              );
+            })}
           </div>
 
           {/* Checklist indicator */}

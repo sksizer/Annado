@@ -76,6 +76,7 @@ export interface Task {
   when: WhenValue;
   deadline: string | null;
   tags: string[];
+  inheritedTags: string[];
   checklist: ChecklistItem[];
   completed: boolean;
   completedDate: string | null;

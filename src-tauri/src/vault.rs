@@ -181,6 +181,26 @@ fn resolve_wikilinks(tasks: &mut [Task], person_names: &std::collections::HashSe
     }
 }
 
+/// Layer frontmatter tags onto a file's tasks as inherited tags (post-parse,
+/// like `persons`). Own line tags win: duplicates are dropped case-insensitively.
+fn apply_inherited_tags(tasks: &mut [Task], content: &str, global_enabled: bool) {
+    let inherit = Vault::annado_inherit_tags_override(content).unwrap_or(global_enabled);
+    if !inherit {
+        return;
+    }
+    let fm_tags = Vault::frontmatter_tags(content);
+    if fm_tags.is_empty() {
+        return;
+    }
+    for task in tasks.iter_mut() {
+        task.inherited_tags = fm_tags
+            .iter()
+            .filter(|ft| !task.tags.iter().any(|t| t.eq_ignore_ascii_case(ft)))
+            .cloned()
+            .collect();
+    }
+}
+
 /// Walk the vault once and collect the person/project names used for wiki-link
 /// resolution. The watcher caches the result and only refreshes it when a file
 /// inside one of the relevant folders changes.
@@ -271,6 +291,7 @@ pub struct Vault {
     // Shared so the background file-watcher reads the live value (no restart needed on change).
     task_format: Arc<RwLock<crate::taskformat::TaskFormat>>,
     task_marker: Arc<RwLock<String>>, // import marker tag ("" = import every checkbox)
+    inherit_tags: Arc<RwLock<bool>>, // global tag-inheritance setting (frontmatter tags)
     recurring_template_count: Arc<RwLock<usize>>, // legacy templates found in the last scan
     tasks: Arc<RwLock<HashMap<String, Task>>>,
     watcher: Option<RecommendedWatcher>,
@@ -301,6 +322,7 @@ fn build_inline_recurring_task(
         when: WhenValue::Date(next.format("%Y-%m-%d").to_string()),
         deadline: None,
         tags: template.tags.clone(),
+        inherited_tags: Vec::new(),
         checklist: Vec::new(),
         completed: false,
         completed_date: None,
@@ -326,6 +348,7 @@ impl Vault {
             is_obsidian_vault,
             task_format: Arc::new(RwLock::new(crate::taskformat::TaskFormat::Annado)),
             task_marker: Arc::new(RwLock::new(String::new())),
+            inherit_tags: Arc::new(RwLock::new(false)),
             recurring_template_count: Arc::new(RwLock::new(0)),
             tasks: Arc::new(RwLock::new(HashMap::new())),
             watcher: None,
@@ -350,6 +373,14 @@ impl Vault {
 
     pub fn current_task_marker(&self) -> String {
         self.task_marker.read().clone()
+    }
+
+    pub fn set_inherit_tags(&self, enabled: bool) {
+        *self.inherit_tags.write() = enabled;
+    }
+
+    pub fn inherit_tags_enabled(&self) -> bool {
+        *self.inherit_tags.read()
     }
 
     /// Non-hidden, non-excluded `.md` files anywhere in the vault. The single place that
@@ -433,6 +464,52 @@ impl Vault {
             }
         }
         false
+    }
+
+    /// Tags from a note's YAML frontmatter `tags:` property — list form or a
+    /// comma-separated string — normalized without a leading '#'.
+    pub fn frontmatter_tags(content: &str) -> Vec<String> {
+        let Some((yaml, _)) = Self::parse_frontmatter(content) else {
+            return Vec::new();
+        };
+        let serde_yml::Value::Mapping(map) = yaml else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = Vec::new();
+        match map.get(&serde_yml::Value::String("tags".to_string())) {
+            Some(serde_yml::Value::Sequence(seq)) => {
+                for v in seq {
+                    if let Some(s) = v.as_str() {
+                        let t = s.trim().trim_start_matches('#');
+                        if !t.is_empty() {
+                            out.push(t.to_string());
+                        }
+                    }
+                }
+            }
+            Some(serde_yml::Value::String(s)) => {
+                for part in s.split(',') {
+                    let t = part.trim().trim_start_matches('#');
+                    if !t.is_empty() {
+                        out.push(t.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+        out
+    }
+
+    /// Per-note override for tag inheritance: Some(value) when the note sets
+    /// `annado_inherit_tags`, None when absent (global setting applies).
+    pub fn annado_inherit_tags_override(content: &str) -> Option<bool> {
+        let (yaml, _) = Self::parse_frontmatter(content)?;
+        if let serde_yml::Value::Mapping(map) = yaml {
+            return map
+                .get(&serde_yml::Value::String("annado_inherit_tags".to_string()))
+                .and_then(|v| v.as_bool());
+        }
+        None
     }
 
     /// Whether a file is a legacy recurring-task template, identified by the trio of
@@ -519,6 +596,7 @@ impl Vault {
 
                 apply_areas_project(&mut tasks, &self.folder_paths.areas_pattern);
                 resolve_wikilinks(&mut tasks, &person_names, &project_names);
+                apply_inherited_tags(&mut tasks, &content, self.inherit_tags_enabled());
                 all_tasks.extend(tasks);
             }
         }
@@ -596,7 +674,7 @@ impl Vault {
         Ok(())
     }
 
-    pub fn update_task(&self, updated_task: Task) -> Result<(), String> {
+    pub fn update_task(&self, mut updated_task: Task) -> Result<(), String> {
         let today = Local::now().date_naive();
 
         // Validate file path is within vault
@@ -700,6 +778,12 @@ impl Vault {
         let new_content = new_lines.join("\n");
         fs::write(&updated_task.file_path, new_content)
             .map_err(|e| format!("Failed to write file: {}", e))?;
+
+        // Inheritance is derived from the note's frontmatter at scan time; keep
+        // it across in-place updates so the pills don't flicker away.
+        if let Some(prev) = self.tasks.read().get(&updated_task.id) {
+            updated_task.inherited_tags = prev.inherited_tags.clone();
+        }
 
         // Update cache
         {
@@ -929,6 +1013,7 @@ impl Vault {
             when: when.clone(),
             deadline: None,
             tags: Vec::new(),
+            inherited_tags: Vec::new(),
             checklist: Vec::new(),
             completed: false,
             completed_date: None,
@@ -1045,6 +1130,7 @@ impl Vault {
         // Share the live cells so format/marker changes take effect without an app restart.
         let task_marker = Arc::clone(&self.task_marker);
         let task_format = Arc::clone(&self.task_format);
+        let inherit_tags = Arc::clone(&self.inherit_tags);
 
         // Watcher thread: debounce a burst of events, then re-parse only the
         // changed files and diff them into the cache (no full-vault rescans).
@@ -1140,6 +1226,7 @@ impl Vault {
                             let mut tasks = parser::parse_file_with_marker(&content, &file_path_str, today, &task_marker);
                             apply_areas_project(&mut tasks, &areas_pattern);
                             resolve_wikilinks(&mut tasks, &person_names, &project_names);
+                            apply_inherited_tags(&mut tasks, &content, *inherit_tags.read());
                             Some(tasks)
                         }
                     } else {
@@ -2780,6 +2867,7 @@ mod tests {
             when: WhenValue::Inbox,
             deadline: None,
             tags: Vec::new(),
+            inherited_tags: Vec::new(),
             checklist: Vec::new(),
             completed: false,
             completed_date: None,
@@ -2996,6 +3084,7 @@ mod tests {
             when: WhenValue::Inbox,
             deadline: None,
             tags: Vec::new(),
+            inherited_tags: Vec::new(),
             checklist: Vec::new(),
             completed: false,
             completed_date: None,
@@ -3066,5 +3155,63 @@ mod tests {
                 ("b.md".to_string(), 1),
             ]
         );
+    }
+
+    #[test]
+    fn test_frontmatter_tags_list_and_string_forms() {
+        let list = "---\ntags:\n  - werk\n  - '#project/alpha'\n---\n- [ ] x\n";
+        assert_eq!(Vault::frontmatter_tags(list), vec!["werk".to_string(), "project/alpha".to_string()]);
+
+        let csv = "---\ntags: werk, thuis\n---\n- [ ] x\n";
+        assert_eq!(Vault::frontmatter_tags(csv), vec!["werk".to_string(), "thuis".to_string()]);
+
+        assert!(Vault::frontmatter_tags("- [ ] geen frontmatter\n").is_empty());
+    }
+
+    #[test]
+    fn test_annado_inherit_tags_override() {
+        assert_eq!(Vault::annado_inherit_tags_override("---\nannado_inherit_tags: true\n---\nx"), Some(true));
+        assert_eq!(Vault::annado_inherit_tags_override("---\nannado_inherit_tags: false\n---\nx"), Some(false));
+        assert_eq!(Vault::annado_inherit_tags_override("---\ntags: [a]\n---\nx"), None);
+    }
+
+    #[test]
+    fn test_scan_injects_inherited_tags_with_override_matrix() {
+        let (dir, vault) = make_temp_vault();
+        vault.set_inherit_tags(true);
+
+        // Note with frontmatter tags; one task already carries an overlapping own tag.
+        fs::write(dir.join("Meeting.md"),
+            "---\ntags: [projectx, werk]\n---\n- [ ] alpha\n- [ ] beta #werk\n").unwrap();
+        // Note that opts out despite the global setting.
+        fs::write(dir.join("OptOut.md"),
+            "---\ntags: [uit]\nannado_inherit_tags: false\n---\n- [ ] gamma\n").unwrap();
+
+        let tasks = vault.scan();
+        let alpha = tasks.iter().find(|t| t.title == "alpha").unwrap();
+        assert_eq!(alpha.inherited_tags, vec!["projectx".to_string(), "werk".to_string()]);
+        let beta = tasks.iter().find(|t| t.title == "beta").unwrap();
+        // Own tag wins: the inherited duplicate is dropped (case-insensitive).
+        assert_eq!(beta.inherited_tags, vec!["projectx".to_string()]);
+        let gamma = tasks.iter().find(|t| t.title == "gamma").unwrap();
+        assert!(gamma.inherited_tags.is_empty(), "per-note opt-out must win over the global setting");
+
+        // The task line itself is never touched by inheritance.
+        let content = fs::read_to_string(dir.join("Meeting.md")).unwrap();
+        assert!(content.contains("- [ ] alpha\n"), "line must stay unchanged: {content}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_scan_injects_when_note_opts_in_despite_global_off() {
+        let (dir, vault) = make_temp_vault();
+        // global default = off
+        fs::write(dir.join("OptIn.md"),
+            "---\ntags: [aan]\nannado_inherit_tags: true\n---\n- [ ] delta\n").unwrap();
+        let tasks = vault.scan();
+        let delta = tasks.iter().find(|t| t.title == "delta").unwrap();
+        assert_eq!(delta.inherited_tags, vec!["aan".to_string()]);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

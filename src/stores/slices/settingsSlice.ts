@@ -113,6 +113,7 @@ async function loadVault(
     get().loadOpenerPrefs();
     get().fetchTaskFormat();
     get().fetchTaskMarker();
+    get().fetchInheritFrontmatterTags();
     get().fetchRecurringTemplateCount();
   } catch (error) {
     storeError(set, error, { isLoading: false });
@@ -131,6 +132,7 @@ export interface SettingsSlice {
   taskFormat: string; // '' = unset (show first-run picker)
   needsFormatPicker: boolean; // true once we've loaded an unset task_format → open first-run picker
   taskMarkerTag: string; // '' = import every checkbox; e.g. 'task' = only #task checkboxes
+  inheritFrontmatterTags: boolean; // show a note's frontmatter tags on its tasks (never written to the task line)
   recurringTemplateCount: number; // legacy templates detected in the vault (gates the migration UI)
   folderPaths: FolderPaths;
   excludedPaths: string[];
@@ -168,6 +170,8 @@ export interface SettingsSlice {
   dismissFormatPicker: () => void;
   fetchTaskMarker: () => Promise<void>;
   setTaskMarker: (marker: string) => Promise<void>;
+  fetchInheritFrontmatterTags: () => Promise<void>;
+  setInheritFrontmatterTags: (enabled: boolean) => Promise<void>;
   fetchRecurringTemplateCount: () => Promise<void>;
   fetchExcludedPaths: () => Promise<void>;
   addExcludedPath: (path: string) => Promise<void>;
@@ -189,6 +193,7 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
   taskFormat: '',
   needsFormatPicker: false,
   taskMarkerTag: '',
+  inheritFrontmatterTags: false,
   recurringTemplateCount: 0,
   folderPaths: DEFAULT_FOLDER_PATHS,
   excludedPaths: [],
@@ -383,6 +388,19 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
       get().fetchTags();
       get().fetchProjects();
       get().fetchPeople();
+    } catch (error) {
+      storeError(set, error);
+    }
+  },
+
+  fetchInheritFrontmatterTags: async () =>
+    guardedFetch(set, () => invoke<boolean>('get_inherit_frontmatter_tags'), (inheritFrontmatterTags) => set({ inheritFrontmatterTags })),
+
+  setInheritFrontmatterTags: async (enabled: boolean) => {
+    try {
+      const tasks = await invoke<Task[]>('set_inherit_frontmatter_tags', { enabled });
+      set({ inheritFrontmatterTags: enabled, tasks });
+      get().fetchTags(); // inherited tags join the sidebar tag list/counts
     } catch (error) {
       storeError(set, error);
     }

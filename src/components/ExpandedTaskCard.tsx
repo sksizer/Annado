@@ -403,6 +403,7 @@ export function ExpandedTaskCard({ task, isCollapsing, isSoleSelection }: Expand
             {/* Tags */}
             <TagEditor
               tags={task.tags}
+              inheritedTags={task.inheritedTags}
               onTagClick={(tag) => setSelectedTag(tag)}
               onTagsChange={async (newTags) => {
                 await updateTask({ id: task.id, tags: newTags });

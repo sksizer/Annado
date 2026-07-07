@@ -29,6 +29,9 @@ pub struct AppConfig {
     // "Open In" preferences: per-target order/visibility and any custom openers.
     #[serde(default)]
     pub opener_prefs: OpenerPrefs,
+    // Show a note's frontmatter tags on its tasks (display-only inheritance).
+    #[serde(default)]
+    pub inherit_frontmatter_tags: bool,
 }
 
 /// A user-defined opener that runs an arbitrary command against a path. `command`
@@ -118,6 +121,7 @@ fn load_config(app: &AppHandle) -> AppConfig {
                 task_format: String::new(),
                 task_marker_tag: String::new(),
                 opener_prefs: OpenerPrefs::default(),
+                inherit_frontmatter_tags: false,
             };
             // Save migrated config and remove legacy file
             if let Some(config_path) = get_config_path(app) {
@@ -238,9 +242,13 @@ pub fn set_vault_path(path: String, app: AppHandle) -> Result<Vec<Task>, String>
     config.is_obsidian_vault = path_buf.join(".obsidian").is_dir();
 
     let mut vault = Vault::new_with_folder_paths(path_buf, config.folder_paths.clone(), config.is_obsidian_vault);
+    if let Ok(dir) = app.path().app_config_dir() {
+        vault.set_state_path(dir.join("scan-state.json"));
+    }
     vault.set_excluded_paths(config.excluded_paths.clone());
     vault.set_task_format(crate::taskformat::TaskFormat::from_config(&config.task_format));
     vault.set_task_marker(config.task_marker_tag.clone());
+    vault.set_inherit_tags(config.inherit_frontmatter_tags);
     let tasks = vault.scan();
 
     // NOTE: We do NOT call generate_recurring_instances() here because:
@@ -495,7 +503,7 @@ pub fn get_all_tags() -> Result<Vec<TagInfo>, String> {
             if task.completed {
                 continue;
             }
-            for tag in &task.tags {
+            for tag in task.tags.iter().chain(task.inherited_tags.iter()) {
                 let entry = groups.entry(tag.to_lowercase()).or_insert((0, std::collections::HashMap::new()));
                 entry.0 += 1;
                 *entry.1.entry(tag.clone()).or_insert(0) += 1;
@@ -587,6 +595,26 @@ pub fn set_task_marker(task_marker: String, app: AppHandle) -> Result<Vec<Task>,
     let mut vault_lock = get_vault_lock().write();
     if let Some(ref mut vault) = *vault_lock {
         vault.set_task_marker(marker);
+        Ok(vault.scan())
+    } else {
+        Err("Vault not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn get_inherit_frontmatter_tags(app: AppHandle) -> bool {
+    load_config(&app).inherit_frontmatter_tags
+}
+
+#[tauri::command]
+pub fn set_inherit_frontmatter_tags(enabled: bool, app: AppHandle) -> Result<Vec<Task>, String> {
+    let mut config = load_config(&app);
+    config.inherit_frontmatter_tags = enabled;
+    save_config(&app, &config)?;
+    // Inheritance changes what every task carries → flip the live flag and rescan.
+    let mut vault_lock = get_vault_lock().write();
+    if let Some(ref mut vault) = *vault_lock {
+        vault.set_inherit_tags(enabled);
         Ok(vault.scan())
     } else {
         Err("Vault not initialized".to_string())

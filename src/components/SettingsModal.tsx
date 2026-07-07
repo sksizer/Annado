@@ -56,7 +56,7 @@ type SettingsTab = 'general' | 'calendar' | 'shortcuts' | 'notifications' | 'abo
 
 
 export function SettingsModal({ isOpen, onClose }: SettingsProps) {
-  const { vaultPath, keybindings, setKeybinding, folderPaths, setFolderPaths, theme, setTheme, accentColor, setAccentColor, excludedPaths, addExcludedPath, removeExcludedPath, calendarEnabled, setCalendarEnabled, availableCalendars, enabledCalendarNames, toggleCalendar, checkCalendarAccess, calendarAccessGranted, calendarBlockingDefaults, setCalendarBlocking, workSchedule, setWorkSchedule, sidebarCounts, setSidebarCount, showProjectCounts, setShowProjectCounts, weekStartsOn, setWeekStartsOn, agendaShowWeekends, setAgendaShowWeekends, defaultTaskDuration, setDefaultTaskDuration, confirmDelete, setConfirmDelete, isObsidianVault, setIsObsidianVault, pathOpeners, openerPrefs, refreshPathOpeners, reorderOpeners, setOpenerHidden, setDefaultOpener, addCustomOpener, removeCustomOpener, setShowWelcome } = useTaskStore();
+  const { vaultPath, keybindings, setKeybinding, folderPaths, setFolderPaths, theme, setTheme, accentColor, setAccentColor, excludedPaths, addExcludedPath, removeExcludedPath, calendarEnabled, setCalendarEnabled, availableCalendars, enabledCalendarNames, toggleCalendar, checkCalendarAccess, calendarAccessGranted, calendarBlockingDefaults, setCalendarBlocking, workSchedule, setWorkSchedule, sidebarCounts, setSidebarCount, showProjectCounts, setShowProjectCounts, weekStartsOn, setWeekStartsOn, agendaShowWeekends, setAgendaShowWeekends, defaultTaskDuration, setDefaultTaskDuration, confirmDelete, setConfirmDelete, isObsidianVault, setIsObsidianVault, pathOpeners, openerPrefs, refreshPathOpeners, reorderOpeners, setOpenerHidden, setDefaultOpener, addCustomOpener, removeCustomOpener, inheritFrontmatterTags, setInheritFrontmatterTags, setShowWelcome } = useTaskStore();
   const [localFolderPaths, setLocalFolderPaths] = useState(folderPaths);
   const [isSavingFolderPaths, setIsSavingFolderPaths] = useState(false);
   const [migrateRecurrenceOpen, setMigrateRecurrenceOpen] = useState(false);
@@ -302,6 +302,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsProps) {
                       <p className="mt-1.5 text-[11px] text-[#B0B0B0] dark:text-[#555]">Checkboxes must include this tag to be imported.</p>
                     </div>
                   )}
+                </div>
+                <div className="mt-4 flex items-center justify-between">
+                  <div>
+                    <span className="text-[13px] text-[#1A1A1A] dark:text-[#E0E0E0]">Inherit tags from notes</span>
+                    <p className="text-[11px] text-[#B0B0B0] dark:text-[#555] mt-0.5">Show a note's frontmatter tags on its tasks (never written to the task line). Override per note with the annado_inherit_tags property (true/false).</p>
+                  </div>
+                  <Toggle checked={inheritFrontmatterTags} onChange={setInheritFrontmatterTags} />
                 </div>
               </div>
 

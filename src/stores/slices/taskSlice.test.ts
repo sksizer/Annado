@@ -133,3 +133,63 @@ describe('taskSlice deleteTask / undo wiring', () => {
     expect(useTaskStore.getState().tasks.find((t) => t.id === 'abc123')).toBeDefined();
   });
 });
+
+describe('taskSlice deleteMultipleTasks (line-safe order + batch undo)', () => {
+  const FILE = '/vault/Tasks.md';
+  const snap = (lineNumber: number): DeletedTaskSnapshot => ({
+    filePath: FILE, lineNumber, rawBlock: `- [ ] task L${lineNumber}`,
+  });
+  const idsOf = (name: string) =>
+    invokeMock.mock.calls.filter((c) => c[0] === name).map((c) => (c[1] as { id: string }).id);
+  const restoreLines = () =>
+    invokeMock.mock.calls
+      .filter((c) => c[0] === 'restore_task')
+      .map((c) => (c[1] as { snapshot: DeletedTaskSnapshot }).snapshot.lineNumber);
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+    // Three tasks in the SAME file at lines 3, 5, 8 — the case that broke bulk delete.
+    useTaskStore.setState({
+      tasks: [
+        makeTask({ id: 't3', lineNumber: 3 }),
+        makeTask({ id: 't8', lineNumber: 8 }),
+        makeTask({ id: 't5', lineNumber: 5 }),
+      ],
+      undoStack: [],
+    });
+  });
+
+  it('deletes highest line first within a file (so shifted lines never go out of bounds)', async () => {
+    invokeMock
+      .mockResolvedValueOnce(snap(8)) // delete t8
+      .mockResolvedValueOnce(snap(5)) // delete t5
+      .mockResolvedValueOnce(snap(3)); // delete t3
+
+    await useTaskStore.getState().deleteMultipleTasks(['t3', 't8', 't5']);
+
+    expect(idsOf('delete_task')).toEqual(['t8', 't5', 't3']);
+    expect(useTaskStore.getState().tasks).toHaveLength(0);
+  });
+
+  it('pushes one undo entry that restores the whole batch ascending (original positions)', async () => {
+    invokeMock
+      .mockResolvedValueOnce(snap(8))
+      .mockResolvedValueOnce(snap(5))
+      .mockResolvedValueOnce(snap(3));
+
+    await useTaskStore.getState().deleteMultipleTasks(['t3', 't8', 't5']);
+
+    const stack = useTaskStore.getState().undoStack;
+    expect(stack).toHaveLength(1); // one ⌘Z undoes the whole batch
+
+    // Running it restores every snapshot, lowest line first so each block lands home.
+    invokeMock
+      .mockResolvedValueOnce(makeTask({ id: 't3', lineNumber: 3 }))
+      .mockResolvedValueOnce(makeTask({ id: 't5', lineNumber: 5 }))
+      .mockResolvedValueOnce(makeTask({ id: 't8', lineNumber: 8 }));
+    await stack[0].run();
+
+    expect(restoreLines()).toEqual([3, 5, 8]);
+    expect(useTaskStore.getState().tasks).toHaveLength(3);
+  });
+});

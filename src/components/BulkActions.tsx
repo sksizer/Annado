@@ -1,15 +1,30 @@
+import { useState } from 'react';
 import { useTaskStore } from '../stores/taskStore';
 import { usePanelId } from '../contexts/PanelContext';
 import { WhenValue } from '../types/task';
 import { DeadlineButton } from './DeadlinePicker';
+import { ConfirmModal } from './ConfirmModal';
 import { WhenButton } from './WhenDatePicker';
+import { DeleteIcon } from './DeleteIcon';
 
 export function BulkActions() {
   const panelId = usePanelId();
-  const { selectedTaskIds: mainIds, sidePanelSelectedTaskIds: sideIds, availableProjects, updateMultipleTasks, clearSelection } = useTaskStore();
+  const {
+    selectedTaskIds: mainIds, sidePanelSelectedTaskIds: sideIds, availableProjects,
+    updateMultipleTasks, deleteMultipleTasks, clearSelection, confirmDelete,
+    selectAllVisible, sidePanelSelectAllVisible,
+    getOrderedVisibleTaskIds, getSidePanelOrderedVisibleTaskIds,
+  } = useTaskStore();
   const selectedTaskIds = panelId === 'sidePanel' ? sideIds : mainIds;
+  const selectAll = panelId === 'sidePanel' ? sidePanelSelectAllVisible : selectAllVisible;
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   if (selectedTaskIds.length <= 1) return null;
+
+  // "Select all" flips to "Deselect all" once every visible task in this panel is selected.
+  const visibleIds = panelId === 'sidePanel' ? getSidePanelOrderedVisibleTaskIds() : getOrderedVisibleTaskIds();
+  const allSelected = visibleIds.length > 0 && selectedTaskIds.length >= visibleIds.length;
+  const toggleSelectAll = () => (allSelected ? clearSelection() : selectAll());
 
   const handleWhenChange = async (when: WhenValue) => {
     await updateMultipleTasks(selectedTaskIds, { when });
@@ -27,12 +42,31 @@ export function BulkActions() {
     await updateMultipleTasks(selectedTaskIds, { completed: true });
   };
 
+  const runDelete = () => {
+    void deleteMultipleTasks(selectedTaskIds);
+    setConfirmOpen(false);
+  };
+
+  const handleDelete = () => {
+    if (confirmDelete) setConfirmOpen(true);
+    else runDelete();
+  };
+
   return (
     <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 max-w-[calc(100%-3rem)]">
       <div className="flex items-center min-w-0 gap-2 px-4 py-2.5 bg-[#1A1A1A] dark:bg-[#2A2A2A] rounded-xl shadow-2xl border border-[#333] dark:border-[#444]">
-        <span className="text-[13px] text-white font-medium mr-2">
+        <span className="text-[13px] text-white font-medium">
           {selectedTaskIds.length} selected
         </span>
+
+        {/* Select-all lives next to the count; toggles to deselect once everything is picked */}
+        <button
+          onClick={toggleSelectAll}
+          className="px-2 py-1 rounded-md text-[12px] text-[#888] hover:text-white hover:bg-[#333] dark:hover:bg-[#444] transition-colors"
+          title="Select all visible (⌘A)"
+        >
+          {allSelected ? 'Deselect all' : 'Select all'}
+        </button>
 
         <div className="w-px h-5 bg-[#444]" />
 
@@ -77,6 +111,15 @@ export function BulkActions() {
           Complete
         </button>
 
+        {/* Delete button */}
+        <button
+          onClick={handleDelete}
+          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[12px] text-white hover:bg-[#333] dark:hover:bg-[#444] transition-colors"
+        >
+          <DeleteIcon className="w-4 h-4 text-danger" />
+          Delete
+        </button>
+
         <div className="w-px h-5 bg-[#444]" />
 
         {/* Cancel button */}
@@ -90,6 +133,13 @@ export function BulkActions() {
           </svg>
         </button>
       </div>
+
+      <ConfirmModal
+        open={confirmOpen}
+        message={`Delete ${selectedTaskIds.length} tasks?`}
+        onConfirm={runDelete}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </div>
   );
 }

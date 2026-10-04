@@ -1,0 +1,9 @@
+# Per-project SDLC configuration. See plugin/conventions/sdlc-yaml.md for
+# the full shape.
+
+quality_checks:
+  - pnpm run check
+
+# worktree_init:
+#   - mise trust
+#   - just setup-worktree

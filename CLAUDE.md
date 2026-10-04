@@ -1,0 +1,6 @@
+-# Annado (sksizer/Annado fork — branch & PR workflow)
+-Remotes: `origin` = sksizer/Annado (the fork), `upstream` = ABeehive/Annado (canonical).
+-- **`upstream` branch** (on the fork): mirrors upstream `main`. Our changes may be pushed on top of it, but it tracks upstream `main`.
+-- **`edge` branch**: our landing spot for ALL our changes — the latest-and-greatest integration build for daily use. It can be overwritten/force-pushed frequently as appropriate, and re-synced onto updated upstream `main`. Never treat `edge` history as stable.
+-- **PR flow**: first open PRs against the fork's **`upstream` branch** (for review) and bring the change into **`edge`** (for consumption/daily use). Then, only with approval, open the PR against **upstream `main`** (ABeehive/Annado). Reuse the same head branch for the fork-`upstream` PR and the eventual upstream PR so review fixes flow straight up.
+-- Commits/PRs in this repo are authored as kelly@sksizer.com.

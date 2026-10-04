@@ -22,7 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-.claude/
 
 # Secrets and certificates
 .env*
@@ -35,3 +34,20 @@ dist-ssr
 
 # Local-only design handoffs and scratch/test vaults
 private-docs/
+
+# --- Claude Code project-local ---
+# Default: ignore everything inside .claude/ ...
+.claude/*
+# ... then explicitly un-ignore the shareable bits.
+!.claude/settings.json
+!.claude/skills/
+!.claude/commands/
+!.claude/agents/
+!.claude/hooks.json
+!.claude/hooks/
+!.claude/hooks/**
+
+# --- SDLC plugin project-local ---
+.sdlc/*
+!.sdlc/skill-ext/
+!.sdlc/skill-ext/**
